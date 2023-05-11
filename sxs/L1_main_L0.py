@@ -121,11 +121,24 @@ rx_yaw_pvt = rx_yaw_pvt.compressed()
 rx_clk_bias_m_pvt = rx_clk_bias_m_pvt.compressed()
 rx_clk_drift_mps_pvt = rx_clk_drift_mps_pvt.compressed()
 
-
 # identify and compensate the value equal to 0 (randomly happens)
-assert (pvt_gps_week == 0).any() is False, "pvt_gps_week contains 0, need to compensate."
+assert not (pvt_gps_week == 0).any(), "pvt_gps_week contains 0, need to compensate."
 
+# ddm-related variables
+transmitter_id = np.ma.compress_rows(np.ma.masked_invalid(transmitter_id))
 
+#
+# transmitter_id = transmitter_id(:,index2);
+#
+# first_scale_factor = first_scale_factor(:,index2);
+# raw_counts = raw_counts(:,:,:,index2);
+# zenith_i2q2 = zenith_i2q2(:,index2);
+#
+# rf_source = rf_source(:,index2);
+#
+# std_dev_rf1 = std_dev_rf1(index2);
+# std_dev_rf2 = std_dev_rf2(index2);
+# std_dev_rf3 = std_dev_rf3(index2);
 
 
 
