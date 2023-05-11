@@ -1,0 +1,15 @@
+name: L1
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - pathlib
+  - netcdf4
+  - matplotlib
+  - scikit-image
+  - rasterio
+  - astropy
+  - pyproj
+  - geopy
+  - pymap3d
