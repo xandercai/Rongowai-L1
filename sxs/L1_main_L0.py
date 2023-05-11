@@ -32,7 +32,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 # specify input L0 netcdf file
 raw_data_path = Path().absolute().joinpath(Path("./dat/raw/"))
-L0_filename = Path("20221103-121416_NZNV-NZCH.nc")
+L0_filename = Path("20230404-065056_NZTU-NZWN.nc")
 L0_dataset = nc.Dataset(raw_data_path.joinpath(L0_filename))
 
 
@@ -71,28 +71,160 @@ rf_source = load_netcdf(L0_dataset["/science/ddm/RF_source"])
 std_dev_rf1 = load_netcdf(L0_dataset["/science/ddm/RF1_zenith_RHCP_std_dev"])
 std_dev_rf2 = load_netcdf(L0_dataset["/science/ddm/RF2_nadir_LHCP_std_dev"])
 std_dev_rf3 = load_netcdf(L0_dataset["/science/ddm/RF3_nadir_RHCP_std_dev"])
+
+delay_bin_res = load_netcdf(L0_dataset['/science/ddm/delay_bin_res_narrow'])        # delay bin resolution
+doppler_bin_res = load_netcdf(L0_dataset['/science/ddm/doppler_bin_res_narrow'])    # doppler bin resolution
+
 # absolute ddm center delay and doppler
 delay_center_chips = load_netcdf(L0_dataset["/science/ddm/center_delay_bin_code_phase"])
 doppler_center_hz = load_netcdf(L0_dataset["/science/ddm/center_doppler_bin_frequency"])
+
 # coherent duration and noncoherent integration
 coherent_duration = (
-    load_netcdf(L0_dataset["/science/ddm/L1_E1_coherent_duration"]) / 1000
+    # xcai load_netcdf(L0_dataset["/science/ddm/L1_E1_coherent_duration"]) / 1000
+    load_netcdf(L0_dataset["/science/ddm/L1_E1_coherent_duration"])
 )
 non_coherent_integrations = (
-    load_netcdf(L0_dataset["/science/ddm/L1_E1_non_coherent_integrations"]) / 1000
+    # xcai load_netcdf(L0_dataset["/science/ddm/L1_E1_non_coherent_integrations"]) / 1000
+    load_netcdf(L0_dataset["/science/ddm/L1_E1_non_coherent_integrations"])
 )
+
 # NGRx estimate additional delay path
 add_range_to_sp_pvt = load_netcdf(L0_dataset["/science/ddm/additional_range_to_SP"])
-
-#
-# TODO: Additional processing if ddm- and rx- related varaibles aren't the same length
-#
 
 # antenna temperatures and engineering timestamp
 eng_timestamp = load_netcdf(L0_dataset["/eng/packet_creation_time"])
 zenith_ant_temp_eng = load_netcdf(L0_dataset["/eng/zenith_ant_temp"])
 nadir_ant_temp_eng = load_netcdf(L0_dataset["/eng/nadir_ant_temp"])
 
+
+### ---------------------- Prelaunch 1.5: Filter valid timestampes
+
+
+# rx-related variables
+
+pvt_gps_week = pvt_gps_week.compressed()
+pvt_gps_sec = pvt_gps_sec.compressed()
+
+rx_pos_x_pvt = rx_pos_x_pvt.compressed()
+rx_pos_y_pvt = rx_pos_y_pvt.compressed()
+rx_pos_z_pvt = rx_pos_z_pvt.compressed()
+
+rx_vel_x_pvt = rx_vel_x_pvt.compressed()
+rx_vel_y_pvt = rx_vel_y_pvt.compressed()
+rx_vel_z_pvt = rx_vel_z_pvt.compressed()
+
+rx_roll_pvt = rx_roll_pvt.compressed()
+rx_pitch_pvt = rx_pitch_pvt.compressed()
+rx_yaw_pvt = rx_yaw_pvt.compressed()
+
+rx_clk_bias_m_pvt = rx_clk_bias_m_pvt.compressed()
+rx_clk_drift_mps_pvt = rx_clk_drift_mps_pvt.compressed()
+
+
+# identify and compensate the value equal to 0 (randomly happens)
+assert (pvt_gps_week == 0).any() is False, "pvt_gps_week contains 0, need to compensate."
+
+
+
+
+
+"""
+
+% ddm-related variables
+index2 = ~isnan(transmitter_id(1,:));
+
+transmitter_id = transmitter_id(:,index2);
+
+first_scale_factor = first_scale_factor(:,index2);
+raw_counts = raw_counts(:,:,:,index2);
+zenith_i2q2 = zenith_i2q2(:,index2);
+
+rf_source = rf_source(:,index2);
+
+std_dev_rf1 = std_dev_rf1(index2);
+std_dev_rf2 = std_dev_rf2(index2);
+std_dev_rf3 = std_dev_rf3(index2);
+
+% absolute ddm center delay and doppler
+delay_center_chips = delay_center_chips(:,index2);
+doppler_center_hz = doppler_center_hz(:,index2);
+
+% coherent duration and noncoherent integration
+coherent_duration = coherent_duration(index2)/1000;                     % convert to seconds
+non_coherent_integrations = non_coherent_integrations(index2)/1000;
+
+% NGRx estimate additional delay path
+add_range_to_sp_pvt = add_range_to_sp_pvt(:,index2);
+
+% the below is to process when ddm-related and rx-related variables do not
+% have the same length, which happens for some of the L0 products
+diff = length(pvt_gps_week)-length(transmitter_id);
+
+if diff > 0
+
+    offset_idx = diff+1;
+
+    pvt_gps_week = pvt_gps_week(offset_idx:end);
+    pvt_gps_sec = pvt_gps_sec(offset_idx:end);
+
+    rx_pos_x_pvt = rx_pos_x_pvt(offset_idx:end);
+    rx_pos_y_pvt = rx_pos_y_pvt(offset_idx:end);
+    rx_pos_z_pvt = rx_pos_z_pvt(offset_idx:end);
+
+    rx_vel_x_pvt = rx_vel_x_pvt(offset_idx:end);
+    rx_vel_y_pvt = rx_vel_y_pvt(offset_idx:end);
+    rx_vel_z_pvt = rx_vel_z_pvt(offset_idx:end);
+
+    rx_roll_pvt = rx_roll_pvt(offset_idx:end);
+    rx_pitch_pvt = rx_pitch_pvt(offset_idx:end);
+    rx_yaw_pvt = rx_yaw_pvt(offset_idx:end);
+
+    rx_clk_bias_m_pvt = rx_clk_bias_m_pvt(offset_idx:end);
+    rx_clk_drift_mps_pvt = rx_clk_drift_mps_pvt(offset_idx:end);
+
+elseif diff < 0
+
+    offset_idx = abs(diff)+1;
+
+    transmitter_id = transmitter_id(:,offset_idx:end);
+
+    first_scale_factor = first_scale_factor(:,offset_idx:end);
+    raw_counts = raw_counts(:,:,:,offset_idx:end);
+    zenith_i2q2 = zenith_i2q2(:,offset_idx:end);
+
+    rf_source = rf_source(:,offset_idx:end);
+
+    std_dev_rf1 = std_dev_rf1(offset_idx:end);
+    std_dev_rf2 = std_dev_rf2(offset_idx:end);
+    std_dev_rf3 = std_dev_rf3(offset_idx:end);
+
+    delay_center_chips = delay_center_chips(:,offset_idx:end);
+    doppler_center_hz = doppler_center_hz(:,offset_idx:end);
+
+    % coherent duration and noncoherent integration
+    coherent_duration = coherent_duration(offset_idx:end)/1000;
+    non_coherent_integrations = non_coherent_integrations(offset_idx:end)/1000;
+
+    % NGRx estimate additional delay path
+    add_range_to_sp_pvt = add_range_to_sp_pvt(:,offset_idx:end);
+
+end
+
+% temperatures from engineering data
+index3 = ~isnan(eng_timestamp);
+
+eng_timestamp = eng_timestamp(index3);
+nadir_ant_temp_eng = nadir_ant_temp_eng(index3);
+zenith_ant_temp_eng = zenith_ant_temp_eng(index3);
+"""
+
+
+
+
+#
+# TODO: Additional processing if ddm- and rx- related varaibles aren't the same length
+#
 
 ### ---------------------- Prelaunch 2 - define external data paths and filenames
 

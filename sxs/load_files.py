@@ -39,15 +39,17 @@ def load_netcdf(netcdf_variable):
     -------
     netcdf_variable as N-D numpy.array
     """
-    if len(netcdf_variable.shape[:]) == 1:
-        return netcdf_variable[:].compressed()
-    if len(netcdf_variable.shape[:]) == 2:
-        return np.ma.compress_rows(np.ma.masked_invalid(netcdf_variable[:]))
-    if len(netcdf_variable.shape[:]) == 4:
-        # note: this results in a masked array that needs special treatment
-        # before use with scipy
-        count_mask = ~netcdf_variable[:, 0, 0, 0].mask
-        return netcdf_variable[count_mask, :, :, :]
+    # if len(netcdf_variable.shape[:]) == 1:
+    #     return netcdf_variable[:].compressed()
+    # if len(netcdf_variable.shape[:]) == 2:
+    #     return np.ma.compress_rows(np.ma.masked_invalid(netcdf_variable[:]))
+    # if len(netcdf_variable.shape[:]) == 4:
+    #     # note: this results in a masked array that needs special treatment
+    #     # before use with scipy
+    #     count_mask = ~netcdf_variable[:, 0, 0, 0].mask
+    #     return netcdf_variable[count_mask, :, :, :]
+    print(f"read variable {netcdf_variable}, \ndimensions is {netcdf_variable.shape}")
+    return netcdf_variable[:]
 
 
 # function to load a specified type of binary data from  file
@@ -128,10 +130,11 @@ def get_orbit_file(gps_week, gps_tow, start_obj, end_obj, change_idx=0):
     sp3_filename1 = (
         "IGS0OPSRAP_"
         + str(start_obj.year)
-        + str(start_obj.timetuple().tm_yday)
+        + '{:03d}'.format(start_obj.timetuple().tm_yday)
         + "0000_01D_15M_ORB.sp3"
     )
-    sp3_filename1_full = orbit_path.joinpath(Path(sp3_filename1))
+    month_year = start_obj.strftime("%B %Y")
+    sp3_filename1_full = orbit_path.joinpath(Path(month_year), Path(sp3_filename1))
     if not os.path.isfile(sp3_filename1_full):
         # try loading in alternate name
         sp3_filename1 = "igr" + str(gps_week1) + str(gps_dow1) + ".SP3"
