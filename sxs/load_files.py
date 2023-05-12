@@ -130,7 +130,7 @@ def get_orbit_file(gps_week, gps_tow, start_obj, end_obj, change_idx=0):
     sp3_filename1 = (
         "IGS0OPSRAP_"
         + str(start_obj.year)
-        + '{:03d}'.format(start_obj.timetuple().tm_yday)
+        + '{:03d}'.format(start_obj.timetuple().tm_yday)  # match for the dropbox data
         + "0000_01D_15M_ORB.sp3"
     )
     month_year = start_obj.strftime("%B %Y")

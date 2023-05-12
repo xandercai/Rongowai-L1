@@ -23,7 +23,6 @@ from load_files import (
 )
 from specular import sp_solver
 
-
 # Required to load the land cover mask file
 Image.MAX_IMAGE_PIXELS = None
 
@@ -127,119 +126,47 @@ assert not (pvt_gps_week == 0).any(), "pvt_gps_week contains 0, need to compensa
 # ddm-related variables
 transmitter_id = np.ma.compress_rows(np.ma.masked_invalid(transmitter_id))
 
-#
-# transmitter_id = transmitter_id(:,index2);
-#
-# first_scale_factor = first_scale_factor(:,index2);
-# raw_counts = raw_counts(:,:,:,index2);
-# zenith_i2q2 = zenith_i2q2(:,index2);
-#
-# rf_source = rf_source(:,index2);
-#
-# std_dev_rf1 = std_dev_rf1(index2);
-# std_dev_rf2 = std_dev_rf2(index2);
-# std_dev_rf3 = std_dev_rf3(index2);
+first_scale_factor = np.ma.compress_rows(np.ma.masked_invalid(first_scale_factor))
+raw_counts = raw_counts[~raw_counts[:, 0, 0, 0].mask, :, :, :]
+zenith_i2q2 = np.ma.compress_rows(np.ma.masked_invalid(zenith_i2q2))
+
+rf_source = np.ma.compress_rows(np.ma.masked_invalid(rf_source))
+
+std_dev_rf1 = std_dev_rf1.compressed()
+std_dev_rf2 = std_dev_rf2.compressed()
+std_dev_rf3 = std_dev_rf3.compressed()
+
+# absolute ddm center delay and doppler
+delay_center_chips = np.ma.compress_rows(np.ma.masked_invalid(delay_center_chips))
+doppler_center_hz = np.ma.compress_rows(np.ma.masked_invalid(doppler_center_hz))
+
+# coherent duration and noncoherent integration
+coherent_duration = coherent_duration.compressed() / 1000  # convert to seconds
+non_coherent_integrations = non_coherent_integrations.compressed() / 1000
 
 
+# NGRx estimate additional delay path
+add_range_to_sp_pvt = np.ma.compress_rows(np.ma.masked_invalid(add_range_to_sp_pvt))
 
-"""
-
-% ddm-related variables
-index2 = ~isnan(transmitter_id(1,:));
-
-transmitter_id = transmitter_id(:,index2);
-
-first_scale_factor = first_scale_factor(:,index2);
-raw_counts = raw_counts(:,:,:,index2);
-zenith_i2q2 = zenith_i2q2(:,index2);
-
-rf_source = rf_source(:,index2);
-
-std_dev_rf1 = std_dev_rf1(index2);
-std_dev_rf2 = std_dev_rf2(index2);
-std_dev_rf3 = std_dev_rf3(index2);
-
-% absolute ddm center delay and doppler
-delay_center_chips = delay_center_chips(:,index2);
-doppler_center_hz = doppler_center_hz(:,index2);
-
-% coherent duration and noncoherent integration
-coherent_duration = coherent_duration(index2)/1000;                     % convert to seconds
-non_coherent_integrations = non_coherent_integrations(index2)/1000;
-
-% NGRx estimate additional delay path
-add_range_to_sp_pvt = add_range_to_sp_pvt(:,index2);
-
-% the below is to process when ddm-related and rx-related variables do not
-% have the same length, which happens for some of the L0 products
-diff = length(pvt_gps_week)-length(transmitter_id);
-
-if diff > 0
-
-    offset_idx = diff+1;
-
-    pvt_gps_week = pvt_gps_week(offset_idx:end);
-    pvt_gps_sec = pvt_gps_sec(offset_idx:end);
-
-    rx_pos_x_pvt = rx_pos_x_pvt(offset_idx:end);
-    rx_pos_y_pvt = rx_pos_y_pvt(offset_idx:end);
-    rx_pos_z_pvt = rx_pos_z_pvt(offset_idx:end);
-
-    rx_vel_x_pvt = rx_vel_x_pvt(offset_idx:end);
-    rx_vel_y_pvt = rx_vel_y_pvt(offset_idx:end);
-    rx_vel_z_pvt = rx_vel_z_pvt(offset_idx:end);
-
-    rx_roll_pvt = rx_roll_pvt(offset_idx:end);
-    rx_pitch_pvt = rx_pitch_pvt(offset_idx:end);
-    rx_yaw_pvt = rx_yaw_pvt(offset_idx:end);
-
-    rx_clk_bias_m_pvt = rx_clk_bias_m_pvt(offset_idx:end);
-    rx_clk_drift_mps_pvt = rx_clk_drift_mps_pvt(offset_idx:end);
-
-elseif diff < 0
-
-    offset_idx = abs(diff)+1;
-
-    transmitter_id = transmitter_id(:,offset_idx:end);
-
-    first_scale_factor = first_scale_factor(:,offset_idx:end);
-    raw_counts = raw_counts(:,:,:,offset_idx:end);
-    zenith_i2q2 = zenith_i2q2(:,offset_idx:end);
-
-    rf_source = rf_source(:,offset_idx:end);
-
-    std_dev_rf1 = std_dev_rf1(offset_idx:end);
-    std_dev_rf2 = std_dev_rf2(offset_idx:end);
-    std_dev_rf3 = std_dev_rf3(offset_idx:end);
-
-    delay_center_chips = delay_center_chips(:,offset_idx:end);
-    doppler_center_hz = doppler_center_hz(:,offset_idx:end);
-
-    % coherent duration and noncoherent integration
-    coherent_duration = coherent_duration(offset_idx:end)/1000;
-    non_coherent_integrations = non_coherent_integrations(offset_idx:end)/1000;
-
-    % NGRx estimate additional delay path
-    add_range_to_sp_pvt = add_range_to_sp_pvt(:,offset_idx:end);
-
-end
-
-% temperatures from engineering data
-index3 = ~isnan(eng_timestamp);
-
-eng_timestamp = eng_timestamp(index3);
-nadir_ant_temp_eng = nadir_ant_temp_eng(index3);
-zenith_ant_temp_eng = zenith_ant_temp_eng(index3);
-"""
-
-
-
-
+# the below is to process when ddm-related and rx-related variables do not
+# have the same length, which happens for some of the L0 products
+assert pvt_gps_week.shape[0] == transmitter_id.shape[0], "pvt_gps_week and transmitter_id do not have the same length."
 #
 # TODO: Additional processing if ddm- and rx- related varaibles aren't the same length
 #
 
+# temperatures from engineering data
+eng_timestamp = eng_timestamp.compressed()
+nadir_ant_temp_eng = nadir_ant_temp_eng.compressed()
+zenith_ant_temp_eng = zenith_ant_temp_eng.compressed()
+
+
 ### ---------------------- Prelaunch 2 - define external data paths and filenames
+
+# load L1a calibration tables
+L1a_path = Path().absolute().joinpath(Path(r'./dat/L1a_cal/'))
+L1a_cal_ddm_counts_db = np.loadtxt(L1a_path.joinpath(r'L1A_cal_ddm_counts_dB.dat'))
+L1a_cal_ddm_power_dbm = np.loadtxt(L1a_path.joinpath(r'L1A_cal_ddm_power_dBm.dat'))
 
 
 # load SRTM_30 DEM
@@ -336,13 +263,16 @@ rx_pos_xyz = [rx_pos_x, rx_pos_y, rx_pos_z]
 rx_vel_x = interp_ddm(pvt_utc, rx_vel_x_pvt, ddm_utc)
 rx_vel_y = interp_ddm(pvt_utc, rx_vel_y_pvt, ddm_utc)
 rx_vel_z = interp_ddm(pvt_utc, rx_vel_z_pvt, ddm_utc)
+rx_vel_xyz = [rx_vel_x, rx_vel_y, rx_vel_z]
 # interpolate rx roll/pitch/yaw onto new time grid
 rx_roll = interp_ddm(pvt_utc, rx_roll_pvt, ddm_utc)
 rx_pitch = interp_ddm(pvt_utc, rx_pitch_pvt, ddm_utc)
 rx_yaw = interp_ddm(pvt_utc, rx_yaw_pvt, ddm_utc)
+rx_attitude = [rx_roll, rx_pitch, rx_yaw]
 # interpolate bias+drift onto new time grid
 rx_clk_bias_m = interp_ddm(pvt_utc, rx_clk_bias_m_pvt, ddm_utc)
 rx_clk_drift_mps = interp_ddm(pvt_utc, rx_clk_drift_mps_pvt, ddm_utc)
+rx_clk = [rx_clk_bias_m, rx_clk_drift_mps]
 
 # define maximum NGRx signal capacity, and half
 J = 20
@@ -380,45 +310,109 @@ status_flags_one_hz = interpn(
 status_flags_one_hz[status_flags_one_hz > 0] = 5
 status_flags_one_hz[status_flags_one_hz <= 0] = 4
 
-# determine time coverage
+# write global variables
+
+L1_postCal = {}
+
 time_coverage_start_obj = datetime.utcfromtimestamp(ddm_utc[0])
-time_coverage_start = time_coverage_start_obj.strftime("%Y-%m-%d %H:%M:%S")
+L1_postCal['time_coverage_start'] = time_coverage_start_obj.strftime("%Y-%m-%d %H:%M:%S")
 time_coverage_end_obj = datetime.utcfromtimestamp(ddm_utc[-1])
-time_coverage_end = time_coverage_end_obj.strftime("%d-%m-%Y %H:%M:%S")
-time_coverage_resolution = ddm_utc[1] - ddm_utc[0]
+L1_postCal['time_coverage_end'] = time_coverage_end_obj.strftime("%d-%m-%Y %H:%M:%S")
+L1_postCal['time_coverage_resolution'] = ddm_utc[1] - ddm_utc[0]
+
+# time coverage
 hours, remainder = divmod((ddm_utc[-1] - ddm_utc[0] + 1), 3600)
 minutes, seconds = divmod(remainder, 60)
-time_coverage_duration = f"P0DT{int(hours)}H{int(minutes)}M{int(seconds)}S"
+L1_postCal['time_coverage_duration'] = f"P0DT{int(hours)}H{int(minutes)}M{int(seconds)}S"
 
-# specify L1 netcdf information and write algorithm + LUT versions
-aircraft_reg = "ZK-NFA"  # default value
-ddm_source = 2  # 1 = GPS signal simulator, 2 = aircraft
-ddm_time_type_selector = 1  # 1 = middle of DDM sampling period
-delay_resolution = 0.25  # unit in chips
-dopp_resolution = 500  # unit in Hz
-dem_source = "SRTM30"
-l1_algorithm_version = "1.1"
-l1_data_version = "1"
-l1a_sig_LUT_version = "1"
-l1a_noise_LUT_version = "1"
-ngrx_port_mapping_version = "1"
-nadir_ant_data_version = "1"
-zenith_ant_data_version = "1"
-prn_sv_maps_version = "1"
-gps_eirp_param_version = "7"
-land_mask_version = "1"
-surface_type_version = "1"
-mean_sea_surface_version = "1"
-per_bin_ant_version = "1"
+L1_postCal['aircraft_reg'] = 'ZK-NFA'             # default value
+L1_postCal['ddm_source'] = 2                      # 1 = GPS signal simulator, 2 = aircraft
+L1_postCal['ddm_time_type_selector'] = 1          # 1 = middle of DDM sampling period
+L1_postCal['delay_resolution'] = 0.25             # unit in chips
+L1_postCal['dopp_resolution'] = 500               # unit in Hz
+L1_postCal['dem_source'] = 'SRTM30'
+
+# write algorithm and LUT versions
+L1_postCal['l1_algorithm_version'] = '1.1'
+L1_postCal['l1_data_version'] = '1'
+L1_postCal['l1a_sig_LUT_version'] = '1'
+L1_postCal['l1a_noise_LUT_version'] = '1'
+L1_postCal['ngrx_port_mapping_version'] = '1'
+L1_postCal['nadir_ant_data_version'] = '1'
+L1_postCal['zenith_ant_data_version'] = '1'
+L1_postCal['prn_sv_maps_version'] = '1'
+L1_postCal['gps_eirp_param_version'] = '7'
+L1_postCal['land_mask_version'] = '1'
+L1_postCal['surface_type_version'] = '1'
+L1_postCal['mean_sea_surface_version'] = '1'
+L1_postCal['per_bin_ant_version'] = '1'
 
 # write timestamps and ac-related variables
-# 0-indexed sample and DDM
-# TODO Skipping these right now to avoid dupication of variables
+L1_postCal['pvt_timestamp_gps_week'] = pvt_gps_week
+L1_postCal['pvt_timestamp_gps_sec'] = pvt_gps_sec
+L1_postCal['pvt_timestamp_utc'] = pvt_utc
 
+L1_postCal['ddm_timestamp_gps_week'] = gps_week
+L1_postCal['ddm_timestamp_gps_sec'] = gps_tow
+L1_postCal['ddm_timestamp_utc'] = ddm_utc
+
+L1_postCal['ddm_pvt_bias'] = ddm_pvt_bias
+
+# 0-indexed sample and DDM
+L1_postCal['sample'] = np.arange(0, len(pvt_gps_sec))
+L1_postCal['ddm'] = np.arange(0, J)
+
+L1_postCal['sp_fsw_delay'] = delay_center_chips
+L1_postCal['sp_ngrx_dopp'] = doppler_center_hz
+
+L1_postCal['add_range_to_sp'] = add_range_to_sp
+L1_postCal['add_range_to_sp_pvt'] = add_range_to_sp_pvt
+
+L1_postCal['ac_lat'] = rx_pos_lla[0]
+L1_postCal['ac_lon'] = rx_pos_lla[1]
+L1_postCal['ac_alt'] = rx_pos_lla[2]
+
+L1_postCal['ac_pos_x_pvt'] = rx_pos_x_pvt
+L1_postCal['ac_pos_y_pvt'] = rx_pos_y_pvt
+L1_postCal['ac_pos_z_pvt'] = rx_pos_z_pvt
+
+L1_postCal['ac_pos_x'] = rx_pos_x
+L1_postCal['ac_pos_y'] = rx_pos_y
+L1_postCal['ac_pos_z'] = rx_pos_z
+
+L1_postCal['ac_vel_x_pvt'] = rx_vel_x_pvt
+L1_postCal['ac_vel_y_pvt'] = rx_vel_y_pvt
+L1_postCal['ac_vel_z_pvt'] = rx_vel_z_pvt
+
+L1_postCal['ac_vel_x'] = rx_vel_x
+L1_postCal['ac_vel_y'] = rx_vel_y
+L1_postCal['ac_vel_z'] = rx_vel_z
+
+L1_postCal['ac_roll_pvt'] = rx_roll_pvt
+L1_postCal['ac_pitch_pvt'] = rx_pitch_pvt
+L1_postCal['ac_yaw_pvt'] = rx_yaw_pvt
+
+L1_postCal['ac_roll'] = rx_attitude[0]
+L1_postCal['ac_pitch'] = rx_attitude[1]
+L1_postCal['ac_yaw'] = rx_attitude[2]
+
+L1_postCal['rx_clk_bias_pvt'] = rx_clk_bias_m_pvt
+L1_postCal['rx_clk_drift_pvt'] = rx_clk_drift_mps_pvt
+
+L1_postCal['rx_clk_bias'] = rx_clk_bias_m
+L1_postCal['rx_clk_drift'] = rx_clk_drift_mps
+
+L1_postCal['ant_temp_nadir'] = ant_temp_nadir
+L1_postCal['ant_temp_zenith'] = ant_temp_zenith
+
+L1_postCal['status_flags_one_hz'] = status_flags_one_hz
+
+# part 1 ends
 
 ### ---------------------- Part 2: Derive TX related variables
 # This part derives TX positions and velocities, maps between PRN and SVN,
 # and gets track ID
+# This part is to deal with the new SP3 naming policy, TODO for old SP3 naming policy (Nov 2022 and before)
 
 # determine unique satellite transponder IDs
 trans_id_unique = np.unique(transmitter_id)
@@ -499,20 +493,41 @@ else:
         start=change_idx,
     )
 
+# write TX variables
+L1_postCal['tx_pos_x'] = tx_pos_x
+L1_postCal['tx_pos_y'] = tx_pos_y
+L1_postCal['tx_pos_z'] = tx_pos_z
+L1_postCal['tx_vel_x'] = tx_vel_x
+L1_postCal['tx_vel_y'] = tx_vel_y
+L1_postCal['tx_vel_z'] = tx_vel_z
+L1_postCal['tx_clk_bias'] = tx_clk_bias
+L1_postCal['prn_code'] = prn_code
+L1_postCal['sv_num'] = sv_num
+L1_postCal['track_id'] = track_id
+
 ### ----------------------  Part 3: L1a calibration
 # this part converts from raw counts to signal power in watts and complete
 # L1a calibration
 
 
 # create data arrays to hold DDM power/count arrays
+# initialise variables for L1a results
 ddm_power_counts = np.full([*raw_counts.shape], np.nan)
 power_analog = np.full([*raw_counts.shape], np.nan)
-ddm_ant = np.full([*transmitter_id.shape], np.nan)
-ddm_noise_counts = np.full([*transmitter_id.shape], np.nan)
-ddm_noise_watts = np.full([*transmitter_id.shape], np.nan)
+
+noise_floor_counts = np.full([*transmitter_id.shape], np.nan)
+noise_floor = np.full([*transmitter_id.shape], np.nan)
+snr_db = np.full([*transmitter_id.shape], np.nan)
+
 peak_ddm_counts = np.full([*transmitter_id.shape], np.nan)
 peak_ddm_watts = np.full([*transmitter_id.shape], np.nan)
 peak_delay_bin = np.full([*transmitter_id.shape], np.nan)
+
+ddm_noise_counts = np.full([*transmitter_id.shape], np.nan)
+ddm_noise_watts = np.full([*transmitter_id.shape], np.nan)
+
+ddm_ant = np.full([*transmitter_id.shape], np.nan)
+inst_gain = np.full([*transmitter_id.shape], np.nan)
 
 # invoke calibration function which populates above arrays
 ddm_calibration(
@@ -528,10 +543,27 @@ ddm_calibration(
     power_analog,
     ddm_ant,
     ddm_noise_counts,
+    ddm_noise_watts,
     peak_ddm_counts,
     peak_ddm_watts,
     peak_delay_bin,
+    noise_floor_counts,
+    noise_floor,
+    snr_db
 )
+
+# save outputs to L1 structure
+L1_postCal['raw_counts'] = ddm_power_counts
+L1_postCal['l1a_power_ddm'] = power_analog
+L1_postCal['zenith_sig_i2q2'] = zenith_i2q2  # read from file
+
+L1_postCal['ddm_noise_floor'] = noise_floor
+L1_postCal['ddm_snr'] = snr_db
+
+L1_postCal['inst_gain'] = inst_gain
+L1_postCal['ddm_ant'] = ddm_ant
+
+
 
 
 # --------------------- Part 4A: SP solver and geometries
