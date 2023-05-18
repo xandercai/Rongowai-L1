@@ -209,16 +209,16 @@ def interp_ddm(x, y, x_ddm):
 
 def get_local_dem(sx_pos_lla, dem, dtu10, dist):
 
-    lon_index = np.argmin(abs(dem["lon"] - sx_pos_lla[0]))
-    lat_index = np.argmin(abs(dem["lat"] - sx_pos_lla[1]))
+    lon_index = np.argmin(abs(dem["lon"] - sx_pos_lla[1]))
+    lat_index = np.argmin(abs(dem["lat"] - sx_pos_lla[0]))
 
     local_lon = dem["lon"][lon_index - LOCAL_HALF_NP : lon_index + LOCAL_HALF_NP + 1]
     local_lat = dem["lat"][lat_index - LOCAL_HALF_NP : lat_index + LOCAL_HALF_NP + 1]
 
     if dist > LOCAL_DEM_MARGIN:
         local_ele = dem["ele"][
-            lon_index - LOCAL_HALF_NP : lon_index + LOCAL_HALF_NP + 1,
-            lat_index - LOCAL_HALF_NP : lat_index + LOCAL_HALF_NP + 1,
+            lat_index - LOCAL_HALF_NP: lat_index + LOCAL_HALF_NP + 1,
+            lon_index - LOCAL_HALF_NP: lon_index + LOCAL_HALF_NP + 1,
         ]
     else:
 
@@ -249,7 +249,7 @@ def get_landcover_type2(lat_P, lon_P, lcv_mask):
     lat_index = math.ceil((lat_max - lat_P) / lat_res) - 1
     lon_index = math.ceil((lon_P - lon_min) / lon_res) - 1
 
-    lcv_RGB1 = lcv_mask.getpixel((lat_index, lon_index))
+    lcv_RGB1 = lcv_mask.getpixel((lon_index, lat_index))
     # drop alpha channel in index 3
     lcv_RGB = tuple([z / 255 for z in lcv_RGB1[:3]])
     color = [
@@ -259,8 +259,10 @@ def get_landcover_type2(lat_P, lon_P, lcv_mask):
         (1, 1, 0),  # 4: crop
         (0, 1, 0),  # 5: grass
         (0.6, 0.2, 0),  # 6: shrub
-        (0, 0.2, 0),
-    ]  # 7: forest
+        (0, 0.2, 0),  # 7: forest
+    ]
+
+    landcover_type = 0
 
     if sum(lcv_RGB) == 3:
         landcover_type = -1
@@ -268,9 +270,62 @@ def get_landcover_type2(lat_P, lon_P, lcv_mask):
         for idx, val in enumerate(color):
             if lcv_RGB == val:
                 landcover_type = idx + 1  # match matlab indexes
-            else:
-                raise Exception("landcover type not found")
+            # else:
+            #     raise Exception("landcover type not found")
+
+    assert landcover_type != 0, f"landcover type not find. landcover_type = {landcover_type} lcv_RGB = {lcv_RGB}."
+
     return landcover_type
+
+
+def get_map_value(lat, lon, model):
+    """
+    this function returns the mss of a pixel <lat1, lon1>
+    The mss of the pixel is derived by interpolating a DTU10 datum
+    with 1 deg resolution
+    Inputs:
+    1) <lat,lon>: geo coordinate of the pixel to be computed
+    2) model: dtu model, currently using DTU10
+    Output:
+    1) mss: linearly interpolated mean sea surface elevation
+    """
+    lat_map = model['lat']
+    lon_map = model['lon']
+    ele_map = model['ele']
+    lat_res = np.abs(lat_map[1]-lat_map[0])
+    lon_res = np.abs(lon_map[1]-lon_map[0])
+
+    y0 = lat
+    x0 = lon
+
+    # longitude adjustment
+    if lon < 0:
+        lon = lon + 360
+    elif lon > 360:
+        lon = lon - 360
+
+    # get four corners coordinates and elevations
+    y1_index = int(math.ceil(abs(lat - lat_map[0]) / lat_res)) - 1  # 0-based
+    y1 = lat_map[y1_index]
+    y2_index = y1_index + 1
+
+    x1_index = int(math.ceil(abs(lon - lon_map[0]) / lon_res)) - 1  # 0-based
+    x1 = lon_map[x1_index]
+    x2_index = x1_index + 1
+
+    ele1 = ele_map[x1_index, y1_index]
+    ele2 = ele_map[x2_index, y1_index]
+    ele3 = ele_map[x1_index, y2_index]
+    ele4 = ele_map[x2_index, y2_index]
+
+    # interpolation
+    fy = y0 - y1
+    fx = x0 - x1
+
+    temp1 = ele1 * (1 - fx) + fx * ele2
+    temp2 = ele3 * (1 - fx) + fx * ele4
+    ele = temp1 * (1 - fy) + temp2 * fy
+    return ele
 
 
 def get_pek_value(lat, lon, water_mask):
@@ -285,25 +340,29 @@ def get_pek_value(lat, lon, water_mask):
 def get_surf_type2(P, cst_mask, lcv_mask, water_mask):
     # this function returns the surface type of a coordinate P <lat lon>
     # P[1] = lat, P[0] = lon
-    landcover_type = get_landcover_type2(P[1], P[0], lcv_mask)
+    landcover_type = get_landcover_type2(P[0], P[1], lcv_mask)
 
-    lat_pek = int(abs(P[1]) // 10 * 10)
-    lon_pek = int(abs(P[0]) // 10 * 10)
+    lat_pek = int(abs(P[0]) // 10 * 10)
+    lon_pek = int(abs(P[1]) // 10 * 10)
 
     file_id = str(lon_pek) + "E_" + str(lat_pek) + "S"
     # water_mask1 = water_mask[file_id]
-    pek_value = get_pek_value(P[1], P[0], water_mask[file_id])
+    pek_value = get_pek_value(P[0], P[1], water_mask[file_id])
 
-    dist_coast = interpn(
-        points=(cst_mask["lon"], cst_mask["lat"]),
-        values=cst_mask["ele"],
-        xi=(P[0], P[1]),
-        method="linear",
-    )[0]
+    # dist_coast = interpn(
+    #     points=(cst_mask["lon"], cst_mask["lat"]),
+    #     values=cst_mask["ele"],
+    #     xi=(P[0], P[1]),
+    #     method="linear",
+    # )[0]
+    dist_coast = get_map_value(P[0], P[1], cst_mask)
 
     if all([pek_value > 0, landcover_type != -1, dist_coast > 0.5]):
-        surface_type = 3  # coordinate on inland water
+        # surface_type = 3  # not consistent with matlab code
+        surface_type = 0  # coordinate on inland water
     elif all([pek_value > 0, dist_coast < 0.5]):
         surface_type = -1
     else:
         surface_type = landcover_type
+
+    return surface_type

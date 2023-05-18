@@ -9,7 +9,7 @@ import geopy.distance as geo_dist
 import time
 import pymap3d as pm
 
-from load_files import get_local_dem
+from load_files import get_local_dem, get_map_value
 
 # define WGS84
 wgs84 = pyproj.Geod(ellps="WGS84")
@@ -93,9 +93,11 @@ def ite(tx_pos_xyz, rx_pos_xyz):
 
         if f_lambda > f_mu:
             a = m_lambda
+            b = b
         else:
+            a = a
             b = m_mu
-
+    # TODO: stlightly different from matlab
     return nadir(m_lambda)
 
 
@@ -108,6 +110,7 @@ def coarsetune(tx_pos_xyz, rx_pos_xyz):
     % 1) SP_xyz, SP_lla: ECEF and LLA coordinate of a SP on a pure WGS84 datum"""
 
     # find coarse SP using Fibonacci sequence
+    # TODO: different from matlab from here, but the code looks fine
     SP_xyz_coarse = ite(tx_pos_xyz, rx_pos_xyz)
     SP_lla_coarse = pyproj.transform(ecef, lla, *SP_xyz_coarse, radians=False)
     # longitude adjustment
@@ -115,6 +118,8 @@ def coarsetune(tx_pos_xyz, rx_pos_xyz):
         SP_lla_coarse[0] += 360
     elif SP_lla_coarse[0] > 360:
         SP_lla_coarse[0] -= 360
+    # change order to lat, lon, alt
+    SP_lla_coarse = SP_lla_coarse[1], SP_lla_coarse[0], SP_lla_coarse[2]
     return SP_xyz_coarse, SP_lla_coarse
 
 
@@ -151,8 +156,8 @@ def finetune(tx_xyz, rx_xyz, sx_lla, L, model):
     % datum thorugh a number of iterative steps."""
     # find the pixel location
     # in Python sx_lla is (lon, lat, alt) not (lat, lon, alt)
-    min_lat, max_lat = (sx_lla[1] - L / 2, sx_lla[1] + L / 2)
-    min_lon, max_lon = (sx_lla[0] - L / 2, sx_lla[0] + L / 2)
+    min_lat, max_lat = (sx_lla[0] - L / 2, sx_lla[0] + L / 2)
+    min_lon, max_lon = (sx_lla[1] - L / 2, sx_lla[1] + L / 2)
 
     lat_bin = np.linspace(min_lat, max_lat, num_grid)
     lon_bin = np.linspace(min_lon, max_lon, num_grid)
@@ -181,7 +186,7 @@ def finetune(tx_xyz, rx_xyz, sx_lla, L, model):
     m_i, n_i = np.where(delay_chip == (np.min(delay_chip)))
 
     # unpack arrays with [0] else they keep nesting
-    sx_temp = [lon_bin[n_i][0], lat_bin[m_i][0], ele[m_i, n_i][0]]
+    sx_temp = [lat_bin[m_i][0], lon_bin[n_i][0], ele[m_i, n_i][0]]
     # TODO we calculate geodesic distance between points in metres - replaces m_lldist.m
     # this is between Matlab idx = 5,6 so extra "-1" due to python 0-indexing (Mat5,6 -> Py4,5)
     NN = int((num_grid - 1) / 2) - 1
@@ -206,13 +211,16 @@ def finetune_ocean(tx_pos_xyz, rx_pos_xyz, sp_lla_coarse, model, L, res_grid):
 
     # derive SP on the ocean surface
     res = 1000
+    sp_temp = sp_lla_coarse
     while res > res_grid:
-        res, _, sp_lla_coarse = finetune(
-            tx_pos_xyz, rx_pos_xyz, sp_lla_coarse, L, model
+        res, _, sp_temp = finetune(
+            tx_pos_xyz, rx_pos_xyz, sp_temp, L, model
         )
         # parameters for the next iteration - new searching area, new SP coordinate
         L = L * 2.0 / 11.0
-    return sp_lla_coarse
+    sp_temp1 = [sp_temp[1], sp_temp[0], sp_temp[2]]
+    sx_xyz = pyproj.transform(lla, ecef, *sp_temp1, radians=False)
+    return sx_xyz, sp_temp
 
 
 def angles(local_dem, tx_pos_xyz, rx_pos_xyz):
@@ -274,6 +282,7 @@ def angles(local_dem, tx_pos_xyz, rx_pos_xyz):
     return theta_i, theta_s, phi_i, phi_s
 
 
+
 def sp_solver(tx_pos_xyz, rx_pos_xyz, dem, dtu10, dist_to_coast_nz):
     """% SP solver derives the coordinate(s) of the specular reflection (sx)
     % SP solver also reports the local incidence angle and the distance to coast in km where the SP occur
@@ -295,7 +304,8 @@ def sp_solver(tx_pos_xyz, rx_pos_xyz, dem, dtu10, dist_to_coast_nz):
         return [np.nan, np.nan, np.nan], np.nan, np.nan, np.nan, LOS_flag
 
     # derive SP coordinate on WGS84 and DTU10
-    _, sx_lla_coarse = coarsetune(tx_pos_xyz, rx_pos_xyz)
+    # TODO: result is slightly not the same with matlab code
+    sx_xyz_coarse, sx_lla_coarse = coarsetune(tx_pos_xyz, rx_pos_xyz)
 
     # initial searching region in degrees
     L_ocean_deg = 1.0
@@ -303,17 +313,20 @@ def sp_solver(tx_pos_xyz, rx_pos_xyz, dem, dtu10, dist_to_coast_nz):
     res_ocean_meter = 0.01
 
     # derive local angles
-    sx_pos_lla = finetune_ocean(
+    # TODO: result is slightly different from matlab code
+    sx_pos_xyz, sx_pos_lla = finetune_ocean(
         tx_pos_xyz, rx_pos_xyz, sx_lla_coarse, dtu10, L_ocean_deg, res_ocean_meter
     )
-    sx_pos_xyz = pyproj.transform(lla, ecef, *sx_pos_lla, radians=False)
+    # sx_pos_xyz = pyproj.transform(lla, ecef, *sx_pos_lla, radians=False)
     # replaces get_map_value function
-    dist = interpn(
-        points=(dist_to_coast_nz["lon"], dist_to_coast_nz["lat"]),
-        values=dist_to_coast_nz["ele"],
-        xi=(sx_pos_lla[0], sx_pos_lla[1]),
-        method="linear",
-    )
+    # TODO Q: the resualt is not the same as get_map_value
+    # dist = interpn(
+    #     points=(dist_to_coast_nz["lon"], dist_to_coast_nz["lat"]),
+    #     values=dist_to_coast_nz["ele"],
+    #     xi=(sx_pos_lla[0], sx_pos_lla[1]),
+    #     method="linear",
+    # )
+    dist = get_map_value(sx_pos_lla[0], sx_pos_lla[1], dist_to_coast_nz)
 
     local_dem = get_local_dem(sx_pos_lla, dem, dtu10, dist)
     theta_i, theta_s, phi_i, phi_s = angles(local_dem, tx_pos_xyz, rx_pos_xyz)
@@ -321,9 +334,16 @@ def sp_solver(tx_pos_xyz, rx_pos_xyz, dem, dtu10, dist_to_coast_nz):
     if dist > 0:
         # local height of the SP = local_dem["ele"][1,1]
         # projection to local dem
-        sx_pos_xyz += (sx_pos_xyz / np.linalg.norm(sx_pos_xyz, 2)) * local_dem["ele"][
-            1, 1
-        ]
+        # sx_pos_xyz += (sx_pos_xyz / np.linalg.norm(sx_pos_xyz, 2)) * local_dem["ele"][
+        #     1, 1
+        # ]
+        local_height = local_dem['ele']
+        local_height = local_height[1, 1]       # local height of the SP
+
+        # projection to local dem
+        term1 = np.array(sx_xyz_coarse) / np.linalg.norm(sx_xyz_coarse)
+        term2 = term1.dot(local_height)
+        sx_pos_xyz = np.array(sx_xyz_coarse) + term2
 
     v_tsx = tx_pos_xyz - sx_pos_xyz
     unit_tsx = v_tsx / np.linalg.norm(v_tsx, 2)
@@ -336,4 +356,265 @@ def sp_solver(tx_pos_xyz, rx_pos_xyz, dem, dtu10, dist_to_coast_nz):
     d_phi = np.rad2deg(np.arctan(d_phi1))
     d_snell_deg = abs(theta_i - theta_s) + abs(d_phi)
 
-    return sx_pos_lla, sx_pos_xyz, inc_angle_deg, d_snell_deg, dist, LOS_flag
+    return sx_pos_xyz, inc_angle_deg, d_snell_deg, dist, LOS_flag
+
+
+def ecef2orf(P, V, S_ecef):
+    """
+    this function computes the elevation (theta) and azimuth (phi) angle of a point
+    in the object's orbit reference frame (orf)
+    Input (all vectors are row vectors):
+    1) P & V: object's ECEF position (P) and velocity (V) vectors
+    2) S_ecef: ECEF coordinate of the point to be computed (S_ecef)
+    Output:
+    1) theta_orf & phi_orf: polar and azimuth angles of S in SV's orf in degree
+    2) S_orf: coordinate of S in orf S_orf
+    """
+    P = P.T
+    V = V.T
+    S_ecef = np.array(S_ecef).T
+    u_ecef = S_ecef - P  # vector from P to S
+
+    theta_e = 7.2921158553e-5  # earth rotation rate, rad/s
+    W_e = np.array([0, 0, theta_e]).T  # earth rotation vector
+    Vi = V + np.cross(W_e, P)  # SC ECEF inertial velocity vector
+
+    # define orbit reference frame - unit vectors
+    y_orf = np.cross(-1 * P, Vi) / np.linalg.norm(np.cross(-1 * P, Vi))
+    z_orf = -1 * P / np.linalg.norm(P)
+    x_orf = np.cross(y_orf, z_orf)
+
+    # transformation matrix
+    T_orf = np.array([x_orf.T, y_orf.T, z_orf.T])
+    S_orf = np.dot(T_orf, u_ecef)
+
+    # elevation and azimuth angles
+    theta_orf = np.rad2deg(np.arccos(S_orf[2] / (np.linalg.norm(S_orf))))
+    phi_orf = math.degrees(math.atan2(S_orf[1], S_orf[0]))
+
+    if phi_orf < 0:
+        phi_orf = 360 + phi_orf
+
+    return theta_orf, phi_orf
+
+
+def deg2rad(degrees):
+    radians = degrees * math.pi / 180
+    return radians
+
+
+def ecef2brf(P, V, S_ecef, SC_att):
+    """
+    this function computes the elevation (theta) and azimuth (phi) angle of a
+    ecef vector in the objects's body reference frame (brf)
+    Input:
+    1) P, V: object's ecef position vector
+    2) SC_att: object's attitude (Euler angle) in the sequence of
+    roll, pitch, yaw, in degrees
+    3) S_ecef: ecef coordinate of the point to be computed
+    Output:
+    1) theta_brf: elevation angle of S in the SC's brf in degree
+    2) phi_brf: azimuth angle of S in the SC's brf in degree
+    """
+    P = P.T
+    V = V.T
+    S_ecef = np.array(S_ecef).T
+
+    phi = deg2rad(SC_att[0])  # roll
+    theta = deg2rad(SC_att[1])  # pitch
+    psi = deg2rad(SC_att[2])  # yaw
+
+    # TODO: the result is different from the matlab code, since the input is slightly different
+    u_ecef = S_ecef - P  # vector from P to S
+
+    # define heading frame - unit vectors
+    y_hrf = np.cross(-1 * P, V) / np.linalg.norm(np.cross(-1 * P, V))
+    z_hrf = -1 * P / np.linalg.norm(-1 * P)
+    x_hrf = np.cross(y_hrf, z_hrf)
+
+    T_hrf = np.array([x_hrf.T, y_hrf.T, z_hrf.T])
+
+    # S in hrf  TODO: the result is different from the matlab code since u_ecef is slightly different
+    S_hrf = np.dot(T_hrf, u_ecef)
+
+    # construct aircraft's attitude matrix
+    Rx_phi = np.array([[1, 0, 0],
+                       [0, math.cos(phi), math.sin(phi)],
+                       [0, -1 * math.sin(phi), math.cos(phi)]])
+
+    Ry_theta = np.array([[math.cos(theta), 0, -1 * math.sin(theta)],
+                         [0, 1, 0],
+                         [math.sin(theta), 0, math.cos(theta)]])
+
+    Rz_psi = np.array([[math.cos(psi), math.sin(psi), 0],
+                      [-1 * math.sin(psi), math.cos(psi), 0],
+                      [0, 0, 1]])
+
+    R = Ry_theta.dot(Rx_phi).dot(Rz_psi)  # transformation matrix
+
+    S_brf = np.dot(R, S_hrf.T)
+
+    # TODO: the result slightly different from the matlab code
+    theta_brf = np.rad2deg(np.arccos(S_brf[2] / (np.linalg.norm(S_brf))))
+    phi_brf = math.degrees(math.atan2(S_brf[1], S_brf[0]))
+
+    if phi_brf < 0:
+        phi_brf = 360 + phi_brf
+
+    return theta_brf, phi_brf
+
+
+def cart2sph(x, y, z):
+    xy = x**2 + y**2
+    r = math.sqrt(xy + z**2)
+    theta = math.atan2(z, math.sqrt(xy))
+    phi = math.atan2(y, x)
+    return phi, theta, r   # for consistency with MATLAB
+
+
+def ecef2enuf(P, S_ecef):
+    """
+    this function computes the elevation (theta) and azimuth (phi) angle of a point
+    in the object's ENU frame (enuf)
+    input:
+    1) P: object's ECEF position vector
+    2) S_ecef: ECEF coordinate of the point to be computed
+    output:
+    1) theta_enuf & phi_enuf: elevation and azimuth angles of S in enuf in degree
+    """
+    # P = [-4593021.50000000,	608280.500000000,	-4370184.50000000]
+    # S_ecef = [-4590047.30433596,	610685.547457113,	-4371634.83935421]
+
+    lon, lat, alt = pyproj.transform(ecef, lla, *P, radians=False)
+    # TODO: The difference is gradually magnified.
+    S_east, S_north, S_up = pm.ecef2enu(*S_ecef, lat, lon, alt, deg=True)
+    phi_enuf, theta_enuf1, _ = cart2sph(S_east, S_north, S_up)
+
+    phi_enuf = np.rad2deg(phi_enuf)
+    theta_enuf1 = np.rad2deg(theta_enuf1)
+
+    theta_enuf = 90 - theta_enuf1
+
+    return theta_enuf, phi_enuf
+
+
+def sp_related(tx, rx, sx_pos_xyz, SV_eirp_LUT):
+    """
+    this function computes the sp-related variables, including angles in
+    various coordinate frames, ranges, EIRP, nadir antenna gain etc
+    Inputs:
+    1) tx, rx: tx and rx structures
+    2) sx_pos_xyz: sx ECEF position vector
+    3) SV_PRN_LUT,SV_eirp_LUT: look-up table between SV number and PRN
+    Outputs:
+    1) sp_angle_body: sp angle in body frame, az and theta
+    2) sp_angle_enu: sp angle in ENU frame, az and theta
+    3) theta_gps: GPS off boresight angle
+    4) range: tx to sx range, and rx to sx range
+    5) gps_rad: EIRP, tx power
+    """
+    # sparse structres
+    tx_pos_xyz = tx['tx_pos_xyz']
+    tx_vel_xyz = tx['tx_vel_xyz']
+    sv_num = tx['sv_num']
+
+    rx_pos_xyz = rx['rx_pos_xyz']
+    rx_vel_xyz = rx['rx_vel_xyz']
+    rx_att = rx['rx_attitude']
+
+    # compute angles
+    theta_gps, _ = ecef2orf(tx_pos_xyz, tx_vel_xyz, sx_pos_xyz)
+
+    sp_theta_body, sp_az_body = ecef2brf(rx_pos_xyz, rx_vel_xyz, sx_pos_xyz, rx_att)
+    sp_theta_enu, sp_az_enu = ecef2enuf(rx_pos_xyz, sx_pos_xyz)
+
+    sp_angle_body = [sp_theta_body, sp_az_body]
+    sp_angle_enu = [sp_theta_enu, sp_az_enu]
+
+    # compute ranges
+    R_tsx = np.linalg.norm(sx_pos_xyz - tx_pos_xyz)        # range from tx to sx
+    R_rsx = np.linalg.norm(sx_pos_xyz - rx_pos_xyz)        # range from rx to sx
+
+    range = [R_tsx, R_rsx]
+
+    # 0-based index
+    # compute gps radiation properties
+    j = SV_eirp_LUT[:, 0] == sv_num             # index of SV number in eirp LUT
+
+    gps_pow_dbw = SV_eirp_LUT[j, 2]            # gps power in dBw
+
+    # coefficients to compute gps antenna gain
+    a = SV_eirp_LUT[j, 3]
+    b = SV_eirp_LUT[j, 4]
+    c = SV_eirp_LUT[j, 5]
+    d = SV_eirp_LUT[j, 6]
+    e = SV_eirp_LUT[j, 7]
+    f = SV_eirp_LUT[j, 8]
+
+    # fitting antenna gain
+    gps_gain_dbi = a * theta_gps ** 5 + b * theta_gps ** 4 + c * theta_gps ** 3 + d * theta_gps ** 2 + e * theta_gps + f
+
+    # compute static gps eirp
+    stat_eirp_dbw = gps_pow_dbw + gps_gain_dbi   # static eirp in dbw
+    stat_eirp_watt = 10 ** (stat_eirp_dbw / 10)     # static eirp in linear watts
+
+    gps_rad = [gps_pow_dbw[0], gps_gain_dbi[0], stat_eirp_watt[0]]
+
+    # compute angles in nadir antenna frame and rx gain
+    sp_theta_ant = sp_theta_body
+    sp_az_ant = sp_az_body + 180
+
+    if sp_az_ant > 360:
+        sp_az_ant = sp_az_ant - 360
+
+    sp_angle_ant = [sp_theta_ant, sp_az_ant]
+
+    return sp_angle_body, sp_angle_enu, sp_angle_ant, theta_gps, range, gps_rad
+
+
+def get_sx_rx_gain(sp_angle_ant, nadir_pattern):
+    """
+    define azimuth and elevation angle in the antenna frame
+
+    Parameters
+    ----------
+    sp_angle_ant
+    nadir_pattern
+
+    Returns
+    -------
+    """
+    res = 0.1  # resolution in degrees
+    az_deg = np.arange(0, 360, res)
+    el_deg = np.arange(120, 0, -1 * res)
+
+    lhcp_gain_pattern = nadir_pattern['LHCP']
+    rhcp_gain_pattern = nadir_pattern['RHCP']
+
+    sp_theta_ant = sp_angle_ant[0]
+    sp_az_ant = sp_angle_ant[1]
+
+    az_index = np.argmin(np.abs(sp_az_ant - az_deg))
+    el_index = np.argmin(np.abs(sp_theta_ant - el_deg))
+
+    lhcp_gain_dbi = lhcp_gain_pattern[el_index, az_index]
+    rhcp_gain_dbi = rhcp_gain_pattern[el_index, az_index]
+
+    sx_rx_gain = [lhcp_gain_dbi, rhcp_gain_dbi]
+
+    return sx_rx_gain
+
+
+def get_chi2(num_delay_bins, num_doppler_bins):
+    pass
+    # return chi2
+
+
+def get_specular_bin(tx, rx, sx, ddm):
+    pass
+    # return specular_bin, zenith_code_phase, confidence_flag
+
+
+
+
+
