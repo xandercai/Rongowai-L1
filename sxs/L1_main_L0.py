@@ -1,17 +1,21 @@
 # mike.laverick@auckland.ac.nz
 # L1_main_L0.py
 # Initial draft L1 script
-
+import math
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 from pathlib import Path
 import netCDF4 as nc
+import numpy
 import numpy as np
 import rasterio
 from scipy.interpolate import interpn
 import pyproj
 from datetime import datetime
 from PIL import Image
+from timeit import default_timer as timer
 
-from cal_functions import ddm_calibration
+from cal_functions import ddm_calibration, db2power, power2db, get_quality_flag
 from gps_functions import gps2utc, utc2gps, satellite_orbits
 from load_files import (
     load_netcdf,
@@ -20,9 +24,23 @@ from load_files import (
     get_orbit_file,
     load_dat_file_grid,
     get_surf_type2,
-    get_local_dem,
+    get_local_dem_new,
 )
-from specular import sp_solver, sp_related, get_sx_rx_gain, get_chi2, get_specular_bin
+from specular import (
+    sp_solver,
+    sp_related,
+    get_sx_rx_gain,
+    get_chi2,
+    get_specular_bin,
+    get_ddm_Aeff,
+    ddm_brcs,
+    get_ddm_nbrcs2,
+    ddm_refl,
+    get_fresnel,
+    coh_det,
+    meter2chips,
+    delay_correction,
+)
 
 # Required to load the land cover mask file
 Image.MAX_IMAGE_PIXELS = None
@@ -568,7 +586,7 @@ L1_postCal['ddm_ant'] = ddm_ant  # 0-based
 
 
 
-# --------------------- Part 4A: SP solver and geometries
+#   # --------------------- Part 4A: SP solver and geometries
 # initialise variables
 # initialise a huge amount of empty arrays
 sx_pos_x = np.full([*transmitter_id.shape], np.nan)
@@ -613,6 +631,7 @@ sx_rx_gain_xpol = np.full([*transmitter_id.shape], np.nan)
 
 # iterate over each second of flight
 for sec in range(len(transmitter_id)):
+    print(f'******** start processing part 4A {sec} second data ********')
     # retrieve rx positions, velocities and attitdues
     # bundle up craft pos/vel/attitude data into per sec, and rx1
     rx_pos_xyz1 = np.array([rx_pos_x[sec], rx_pos_y[sec], rx_pos_z[sec]])
@@ -627,7 +646,6 @@ for sec in range(len(transmitter_id)):
     # variables are solved only for LHCP channels
     # RHCP channels share the same vales except RX gain solved for each channel
     for ngrx_channel in range(J_2):
-        print(f'******** start processing part 4A {sec} second data ********')
         # retrieve tx positions and velocities
         # bundle up satellite position and velocity data into per sec, and tx1
         tx_pos_xyz1 = np.array(
@@ -832,6 +850,64 @@ L1_postCal['static_gps_eirp'] = static_gps_eirp         # checked ok
 L1_postCal['gps_tx_power_db_w'] = gps_tx_power_db_w     # checked ok
 L1_postCal['gps_ant_gain_db_i'] = gps_ant_gain_db_i     # checked ok
 
+# np.save('debug.npy', L1_postCal)
+
+##############
+# L1_postCal_loaded = np.load('debug.npy', allow_pickle=True).item()
+
+# def dic_to_keys_values(dic):
+#     keys, values = list(dic.keys()), list(dic.values())
+#     return keys, values
+#
+#
+# def numpy_assert_almost_dict_values(dict1, dict2):
+#     keys1, values1 = dic_to_keys_values(dict1)
+#     keys2, values2 = dic_to_keys_values(dict2)
+#     np.testing.assert_equal(keys1, keys2)
+#     np.testing.assert_equal(values1, values2)
+#
+#
+# numpy_assert_almost_dict_values(L1_postCal, L1_postCal_loaded)
+##############
+
+# L1_postCal = np.load('debug.npy', allow_pickle=True).item()
+#
+# sx_pos_x = L1_postCal['sp_pos_x']
+# sx_pos_y = L1_postCal['sp_pos_y']
+# sx_pos_z = L1_postCal['sp_pos_z']
+#
+# sx_lat = L1_postCal['sp_lat']
+# sx_lon = L1_postCal['sp_lon']
+# sx_alt = L1_postCal['sp_alt']
+#
+# sx_vel_x = L1_postCal['sp_vel_x']
+# sx_vel_y = L1_postCal['sp_vel_y']
+# sx_vel_z = L1_postCal['sp_vel_z']
+#
+# surface_type = L1_postCal['sp_surface_type']
+# dist_to_coast_km = L1_postCal['sp_dist_to_coast_km']
+# LOS_flag = L1_postCal['LOS_flag']
+#
+# rx_to_sp_range = L1_postCal['rx_to_sp_range']
+# tx_to_sp_range = L1_postCal['tx_to_sp_range']
+#
+# sx_inc_angle = L1_postCal['sp_inc_angle']
+# sx_d_snell_angle = L1_postCal['sp_d_snell_angle']
+#
+# sx_theta_body = L1_postCal['sp_theta_body']
+# sx_az_body = L1_postCal['sp_az_body']
+# sx_theta_enu = L1_postCal['sp_theta_enu']
+# sx_az_enu = L1_postCal['sp_az_enu']
+#
+# sx_rx_gain = L1_postCal['sp_rx_gain']
+#
+# gps_boresight = L1_postCal['gps_off_boresight_angle_deg']
+#
+# static_gps_eirp = L1_postCal['static_gps_eirp']
+# gps_tx_power_db_w = L1_postCal['gps_tx_power_db_w']
+# gps_ant_gain_db_i = L1_postCal['gps_ant_gain_db_i']
+
+##############
 
 # -------------------- Part 4B: BRCS/NBRCS, reflectivity, coherent status and fresnel zone
 # initialise variables
@@ -872,10 +948,11 @@ coherency_ratio = np.full([*transmitter_id.shape], np.nan)
 coherency_state = np.full([*transmitter_id.shape], np.nan)
 
 # derive amb-function (chi2) to be used in computing A_eff
-chi2 = get_chi2(39, 4)  # 0-based
+chi2 = get_chi2(40, 5)  # 0-based
 
 # derive floating SP bin location and effective scattering area A_eff
 for sec in range(len(transmitter_id)):
+    t0 = timer()
 
     # retrieve rx positions and velocities
     rx_pos_xyz1 = np.array([rx_pos_x[sec], rx_pos_y[sec], rx_pos_z[sec]])
@@ -885,10 +962,9 @@ for sec in range(len(transmitter_id)):
         "rx_pos_xyz": rx_pos_xyz1,
         "rx_vel_xyz": rx_vel_xyz1,
         "rx_clk_drift": rx_clk_drift1,
-    } 
+    }
 
     for ngrx_channel in range(J_2):
-
         # retrieve tx positions and velocities
         tx_pos_xyz1 = np.array(
             [
@@ -904,7 +980,7 @@ for sec in range(len(transmitter_id)):
                 tx_vel_z[sec][ngrx_channel],
             ]
         )
-        
+
         tx1 = {'tx_pos_xyz': tx_pos_xyz1, 'tx_vel_xyz': tx_vel_xyz1}
 
         # retrieve sx-related parameters
@@ -950,10 +1026,9 @@ for sec in range(len(transmitter_id)):
                 'doppler_center_bin': 2}
 
         if (not np.isnan(sx_pos_x[sec][ngrx_channel])) and (np.count_nonzero(raw_counts1) > 0):
-            
             # Part 4.3: SP-related variables - 2
             # this part derives confidence and floating bin locations of SP
-            peak_doppler_bin1, peak_delay_bin1 = np.unravel_index(raw_counts1.argmin(), raw_counts1.shape)
+            peak_delay_bin1, peak_doppler_bin1 = np.unravel_index(raw_counts1.argmax(), raw_counts1.shape)
 
             specular_bin1, zenith_code_phase1, confidence_flag1 = get_specular_bin(tx1, rx1, sx1, ddm1)
 
@@ -961,28 +1036,29 @@ for sec in range(len(transmitter_id)):
             sx1['sx_doppler_bin'] = specular_bin1[1]
 
             # Part 4.4a: Effective scattering area
-            L = 18030 
+            L = 18030
             grid_res = 30   # L may need to be updated in the future
-            local_dem1 = get_local_dem(sx_pos_lla1, L, grid_res, dem, dtu10, dist_to_coast1)
+
+            local_dem1 = get_local_dem_new(sx_pos_lla1, L, grid_res, dem, dtu10, dist_to_coast1)
 
             A_eff1, A_eff_all1 = get_ddm_Aeff(tx1, rx1, sx1, local_dem1, phy_ele_size, chi2)
 
             # save to variables
-            brcs_ddm_peak_bin_delay_row[sec][ngrx_channel] = peak_delay_bin1 - 1   # minus 1 for 0-based indces
-            brcs_ddm_peak_bin_dopp_col[sec][ngrx_channel] = peak_doppler_bin1 - 1
+            brcs_ddm_peak_bin_delay_row[sec][ngrx_channel] = peak_delay_bin1   # 0-based indces
+            brcs_ddm_peak_bin_dopp_col[sec][ngrx_channel] = peak_doppler_bin1
 
             brcs_ddm_sp_bin_delay_row[sec][ngrx_channel] = specular_bin1[0]
             brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel] = specular_bin1[1]
             sp_delay_error[sec][ngrx_channel] = specular_bin1[2]
             sp_dopp_error[sec][ngrx_channel] = specular_bin1[3]
-            
+
             zenith_code_phase[sec][ngrx_channel] = zenith_code_phase1
 
             confidence_flag[sec][ngrx_channel] = confidence_flag1
 
-            A_eff[sec, ngrx_channel, :, :] = A_eff1
-            A_eff_all[sec, ngrx_channel, :, :] = A_eff_all1
-
+            A_eff[sec, ngrx_channel, :, :] = A_eff1.T
+            A_eff_all[sec, ngrx_channel, :, :] = A_eff_all1.T
+    print(f'******** finish processing part 4B {sec} second data with {timer() - t0}********')
 
 # extend to RHCP channels
 brcs_ddm_peak_bin_delay_row[:, J_2:J] = brcs_ddm_peak_bin_delay_row[:, 0:J_2]
@@ -992,7 +1068,7 @@ brcs_ddm_sp_bin_delay_row[:, J_2:J] = brcs_ddm_sp_bin_delay_row[:, 0:J_2]
 brcs_ddm_sp_bin_dopp_col[:, J_2:J] = brcs_ddm_sp_bin_dopp_col[:, 0:J_2]
 sp_delay_error[:, J_2:J] = sp_delay_error[:, 0:J_2]
 sp_dopp_error[:, J_2:J] = sp_dopp_error[:, 0:J_2]
-            
+
 zenith_code_phase[:, J_2:J] = zenith_code_phase[:, 0:J_2]
 
 confidence_flag[:, J_2:J] = confidence_flag[:, 0:J_2]
@@ -1001,30 +1077,73 @@ A_eff[:, J_2:J, :, :] = A_eff[:, 0:J_2, :, :]
 A_eff_all[:, J_2:J, :, :] = A_eff_all[:, 0:J_2, :, :]
 
 # save variables
-L1_postCal['brcs_ddm_peak_bin_delay_row'] = brcs_ddm_peak_bin_delay_row
-L1_postCal['brcs_ddm_peak_bin_dopp_col'] = brcs_ddm_peak_bin_dopp_col
+L1_postCal['brcs_ddm_peak_bin_delay_row'] = brcs_ddm_peak_bin_delay_row     # checked ok
+L1_postCal['brcs_ddm_peak_bin_dopp_col'] = brcs_ddm_peak_bin_dopp_col       # checked ok
 
-L1_postCal['brcs_ddm_sp_bin_delay_row'] = brcs_ddm_sp_bin_delay_row
-L1_postCal['brcs_ddm_sp_bin_dopp_col'] = brcs_ddm_sp_bin_dopp_col
+L1_postCal['brcs_ddm_sp_bin_delay_row'] = brcs_ddm_sp_bin_delay_row         # checked diff 0.001
+L1_postCal['brcs_ddm_sp_bin_dopp_col'] = brcs_ddm_sp_bin_dopp_col           # checked diff 0.001
 
-L1_postCal['sp_delay_error'] = sp_delay_error
-L1_postCal['sp_dopp_error'] = sp_dopp_error
+L1_postCal['sp_delay_error'] = sp_delay_error                               # checked diff 1 e-4
+L1_postCal['sp_dopp_error'] = sp_dopp_error                                 # checked diff 1 / e2
 L1_postCal['sp_ngrx_delay_correction'] = sp_delay_error
 L1_postCal['sp_ngrx_dopp_correction'] = sp_dopp_error
 
-L1_postCal['zenith_code_phase'] = zenith_code_phase
+L1_postCal['zenith_code_phase'] = zenith_code_phase                         # checked ok
 
-L1_postCal['confidence_flag'] = confidence_flag
+L1_postCal['confidence_flag'] = confidence_flag                             # checked ok
 
 L1_postCal['eff_scatter'] = A_eff
 L1_postCal['A_eff_all'] = A_eff_all
 
+######################################################################
+# np.save('debug1.npy', L1_postCal)
+
+######################################################################
+# L1_postCal = np.load('debug1.npy', allow_pickle=True).item()
+#
+# sx_pos_x = L1_postCal['sp_pos_x']
+# sx_pos_y = L1_postCal['sp_pos_y']
+# sx_pos_z = L1_postCal['sp_pos_z']
+#
+# sx_lat = L1_postCal['sp_lat']
+# sx_lon = L1_postCal['sp_lon']
+# sx_alt = L1_postCal['sp_alt']
+#
+# sx_vel_x = L1_postCal['sp_vel_x']
+# sx_vel_y = L1_postCal['sp_vel_y']
+# sx_vel_z = L1_postCal['sp_vel_z']
+#
+# sx_inc_angle = L1_postCal['sp_inc_angle']
+# sx_d_snell_angle = L1_postCal['sp_d_snell_angle']
+#
+# surface_type = L1_postCal['sp_surface_type']
+# dist_to_coast_km = L1_postCal['sp_dist_to_coast_km']
+# LOS_flag = L1_postCal['LOS_flag']
+#
+# static_gps_eirp = L1_postCal['static_gps_eirp']
+# gps_tx_power_db_w = L1_postCal['gps_tx_power_db_w']
+# gps_ant_gain_db_i = L1_postCal['gps_ant_gain_db_i']
+#
+# sx_rx_gain = L1_postCal['sp_rx_gain']
+#
+# rx_to_sp_range = L1_postCal['rx_to_sp_range']
+# tx_to_sp_range = L1_postCal['tx_to_sp_range']
+#
+# A_eff = L1_postCal['eff_scatter']
+#
+# brcs_ddm_sp_bin_delay_row = L1_postCal['brcs_ddm_sp_bin_delay_row']
+# brcs_ddm_sp_bin_dopp_col = L1_postCal['brcs_ddm_sp_bin_dopp_col']
+# ######################################################################
+
+
 # derive brcs, nbrcs, and other parameters
 for sec in range(len(transmitter_id)):
+    t0 = timer()
     for ngrx_channel in range(J):
+
         # variables for deriving BRCS and reflectivity
         tx_pos_xyz1 = [tx_pos_x[sec][ngrx_channel], tx_pos_y[sec][ngrx_channel], tx_pos_z[sec][ngrx_channel]]
-        rx_pos_xyz1 = rx_pos_xyz[sec,:]
+        rx_pos_xyz1 = [rx_pos_x[sec], rx_pos_y[sec], rx_pos_z[sec]]
         sx_pos_xyz1 = [sx_pos_x[sec][ngrx_channel], sx_pos_y[sec][ngrx_channel], sx_pos_z[sec][ngrx_channel]]
 
         inc_angle1 = sx_inc_angle[sec][ngrx_channel]
@@ -1034,56 +1153,57 @@ for sec in range(len(transmitter_id)):
         rx_gain_db_i1 = sx_rx_gain[sec][ngrx_channel]
         TSx1 = tx_to_sp_range[sec][ngrx_channel]
         RSx1 = rx_to_sp_range[sec][ngrx_channel]
-        
+
         ddm_ant1 = ddm_ant[sec][ngrx_channel]
-        
+
         # retrieve ddm-related variables
-        raw_counts1 = ddm_power_counts[sec, ngrx_channel, :, :]  
+        raw_counts1 = ddm_power_counts[sec, ngrx_channel, :, :]
         snr_db1 = snr_db[sec][ngrx_channel]
 
         power_analog1 = power_analog[sec, ngrx_channel, :, :]  # L1a calibrated power watts
-        
+
         if (not np.isnan(ddm_ant1)) and (not np.isnan(sx_pos_x[sec][ngrx_channel])) and (np.count_nonzero(raw_counts1) > 0):
 
             # compensate cable loss
             cable_loss_db = 0.0
-            
-            if ddm_ant1 == 2:
+
+            if ddm_ant1 == 1:
                 cable_loss_db = 0.6600         # LHCP cable loss
 
-            if ddm_ant1 == 3:
+            if ddm_ant1 == 2:
                 cable_loss_db = 0.5840         # RHCP cable loss
 
-            cable_loss = db2pow(cable_loss_db)
+            cable_loss = db2power(cable_loss_db)
             power_analog_cable_loss1 = power_analog1 * cable_loss
-            
+
             # Part 4.4b: brcs, nbrcs, LES and TES
+            # power factor is e-20  which amplifies the difference of power_analog_cable_loss1 between matlab and python
             brcs1 = ddm_brcs(power_analog_cable_loss1, eirp_watt1, rx_gain_db_i1, TSx1, RSx1)
 
             A_eff1 = A_eff[sec, ngrx_channel, :, :]
             sx_bin1 = np.zeros(2)
             sx_bin1[0] = brcs_ddm_sp_bin_delay_row[sec][ngrx_channel]
             sx_bin1[1] = brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel]
-            
+
             # the below computes two versions of NBRCS
             # version 1: smaller area, version 2: larger area
-            nbrcs_v1_1, nbrcs_scatter_v1_1 = get_ddm_nbrcs2(brcs1, A_eff1, sx_bin1, 0)
-            nbrcs_v2_1, nbrcs_scatter_v2_1 = get_ddm_nbrcs2(brcs1, A_eff1, sx_bin1, 1)
+            nbrcs_v1_1, nbrcs_scatter_v1_1 = get_ddm_nbrcs2(brcs1, A_eff1, sx_bin1, 1)
+            nbrcs_v2_1, nbrcs_scatter_v2_1 = get_ddm_nbrcs2(brcs1, A_eff1, sx_bin1, 2)
 
             # Part 4.5: reflectivity and peak reflectivity
             refl1, refl_peak1 = ddm_refl(power_analog_cable_loss1, eirp_watt1, rx_gain_db_i1, TSx1, RSx1)
-           
+
             # Part 4.6: Fresnel coefficient and dimensions
-            fresnel_coeff1, fresnel_axis1, fresnel_orientation1 = get_fresnel(tx_pos_xyz1, rx_pos_xyz1, sx_pos_xyz1, 
+            fresnel_coeff1, fresnel_axis1, fresnel_orientation1 = get_fresnel(tx_pos_xyz1, rx_pos_xyz1, sx_pos_xyz1,
                                                                               dist_to_coast1, inc_angle1,ddm_ant1)
 
             # Part 4.7: coherent status
             CR1, CS1 = coh_det(raw_counts1, snr_db1)
 
             # normalised reflected waveform
-            refl_waveform1 = refl1.sum(axis=0)
+            refl_waveform1 = refl1.sum(axis=1)
             norm_refl_waveform1 = refl_waveform1 / refl_peak1
-            
+
             # save to variables
             brcs[sec, ngrx_channel] = brcs1
 
@@ -1092,7 +1212,7 @@ for sec in range(len(transmitter_id)):
 
             nbrcs_scatter_area_v2[sec][ngrx_channel] = nbrcs_scatter_v2_1
             ddm_nbrcs_v2[sec][ngrx_channel] = nbrcs_v2_1
-            
+
             surface_reflectivity[sec][ngrx_channel] = refl1
             surface_reflectivity_peak[sec][ngrx_channel] = refl_peak1
 
@@ -1104,26 +1224,249 @@ for sec in range(len(transmitter_id)):
             coherency_ratio[sec][ngrx_channel] = CR1
             coherency_state[sec][ngrx_channel] = CS1
 
-            norm_refl_waveform[sec, ngrx_channel, :, :] = norm_refl_waveform1
-            
+            norm_refl_waveform[sec][ngrx_channel][:, 0] = norm_refl_waveform1
+    print(f'******** finish processing part 4B-2 {sec} second data with {timer() - t0}********')
+
 L1_postCal['brcs'] = brcs
 
-L1_postCal['nbrcs_scatter_area_v1'] = nbrcs_scatter_area_v1
-L1_postCal['ddm_nbrcs_v1'] = ddm_nbrcs_v1
+L1_postCal['nbrcs_scatter_area_v1'] = nbrcs_scatter_area_v1             # checked diff 1000 / e6
+L1_postCal['ddm_nbrcs_v1'] = ddm_nbrcs_v1                               # checked diff 0.1
 
-L1_postCal['nbrcs_scatter_area_v2'] = nbrcs_scatter_area_v2
-L1_postCal['ddm_nbrcs_v2'] = ddm_nbrcs_v2
+L1_postCal['nbrcs_scatter_area_v2'] = nbrcs_scatter_area_v2             # checked diff 100000 / e8
+L1_postCal['ddm_nbrcs_v2'] = ddm_nbrcs_v2                               # checked diff 0.1
 
 L1_postCal['surface_reflectivity'] = surface_reflectivity
-L1_postCal['surface_reflectivity_peak'] = surface_reflectivity_peak
+L1_postCal['surface_reflectivity_peak'] = surface_reflectivity_peak     # checked diff 0.01
 
-L1_postCal['fresnel_coeff'] = fresnel_coeff
-L1_postCal['fresnel_major'] = fresnel_major
-L1_postCal['fresnel_minor'] = fresnel_minor
+L1_postCal['fresnel_coeff'] = fresnel_coeff                             # checked ok
+L1_postCal['fresnel_major'] = fresnel_major                             # checked diff 0.01
+L1_postCal['fresnel_minor'] = fresnel_minor                             # checked diff 0.1 / e2
 L1_postCal['fresnel_orientation'] = fresnel_orientation
 
-L1_postCal['coherency_ratio'] = coherency_ratio
-L1_postCal['coherency_state'] = coherency_state
+L1_postCal['coherency_ratio'] = coherency_ratio                         # checked ok
+L1_postCal['coherency_state'] = coherency_state                         # checked ok
 
 L1_postCal['norm_refl_waveform'] = norm_refl_waveform
+#
+# ######################################################################
+# np.save('debug2.npy', L1_postCal)
+#
+# ######################################################################
 
+#  L1_postCal = np.load('debug2.npy', allow_pickle=True).item()
+#
+#  sx_pos_x = L1_postCal['sp_pos_x']
+#  sx_pos_y = L1_postCal['sp_pos_y']
+#  sx_pos_z = L1_postCal['sp_pos_z']
+#
+#  sx_lat = L1_postCal['sp_lat']
+#  sx_lon = L1_postCal['sp_lon']
+#  sx_alt = L1_postCal['sp_alt']
+#
+#  sx_vel_x = L1_postCal['sp_vel_x']
+#  sx_vel_y = L1_postCal['sp_vel_y']
+#  sx_vel_z = L1_postCal['sp_vel_z']
+#
+#  sx_inc_angle = L1_postCal['sp_inc_angle']
+#  sx_d_snell_angle = L1_postCal['sp_d_snell_angle']
+#
+#  surface_type = L1_postCal['sp_surface_type']
+#  dist_to_coast_km = L1_postCal['sp_dist_to_coast_km']
+#  LOS_flag = L1_postCal['LOS_flag']
+#
+#  static_gps_eirp = L1_postCal['static_gps_eirp']
+#  gps_tx_power_db_w = L1_postCal['gps_tx_power_db_w']
+#  gps_ant_gain_db_i = L1_postCal['gps_ant_gain_db_i']
+#
+#  sx_rx_gain = L1_postCal['sp_rx_gain']
+#
+#  rx_to_sp_range = L1_postCal['rx_to_sp_range']
+#  tx_to_sp_range = L1_postCal['tx_to_sp_range']
+#
+#  brcs_ddm_sp_bin_delay_row = L1_postCal['brcs_ddm_sp_bin_delay_row']
+#  brcs_ddm_sp_bin_dopp_col = L1_postCal['brcs_ddm_sp_bin_dopp_col']
+# ######################################################################
+
+# Cross Pol
+
+tx_pos_x = np.full([*transmitter_id.shape], np.nan)
+nbrcs_cross_pol_v1 = np.full([*transmitter_id.shape], np.nan)
+nbrcs_cross_pol_v2 = np.full([*transmitter_id.shape], np.nan)
+
+for sec in range(len(transmitter_id)):
+    for ngrx_channel in range(J_2):
+
+        nbrcs_LHCP_v1 = ddm_nbrcs_v1[sec][ngrx_channel]
+        nbrcs_RHCP_v1 = ddm_nbrcs_v1[sec][ngrx_channel + J_2]
+        
+        nbrcs_LHCP_v2 = ddm_nbrcs_v2[sec][ngrx_channel]
+        nbrcs_RHCP_v2 = ddm_nbrcs_v2[sec][ngrx_channel + J_2]
+
+        CP1 = nbrcs_LHCP_v1 / nbrcs_RHCP_v1
+        CP_db1 = power2db(CP1)
+
+        CP2 = nbrcs_LHCP_v2 / nbrcs_RHCP_v2
+        CP_db2 = power2db(CP2)
+
+        nbrcs_cross_pol_v1[sec][ngrx_channel] = CP_db1
+        nbrcs_cross_pol_v2[sec][ngrx_channel] = CP_db2
+
+
+nbrcs_cross_pol_v1[:, 10:19] = -1 * nbrcs_cross_pol_v1[:, 0:9]
+nbrcs_cross_pol_v2[:, 10:19] = -1 * nbrcs_cross_pol_v2[:, 0:9]
+
+L1_postCal['nbrcs_cross_pol_v1'] = nbrcs_cross_pol_v1
+L1_postCal['nbrcs_cross_pol_v2'] = nbrcs_cross_pol_v2
+L1_postCal['lna_noise_figure'] = np.full([*transmitter_id.shape], 3)     # LNA noise figure is 3 dB according to the specification
+
+# Quality Flags
+
+quality_flags1 = np.full([*transmitter_id.shape], np.nan)
+
+for sec in range(len(transmitter_id)):
+    for ngrx_channel in range(J):
+        quality_flag1_1 = np.full([23, 1], 0)
+
+        # flag 1, 2 and 22  0-based indexing
+        rx_roll1 = rx_roll[sec]
+        rx_pitch1 = rx_pitch[sec]
+        rx_yaw1 = rx_yaw[sec]
+    
+        if (rx_roll1 >= 29) or (rx_pitch1 >= 9) or (rx_yaw1 >= 4):  # 0-based indexing
+            quality_flag1_1[2] = 1
+        else:
+            quality_flag1_1[1] = 1
+
+        if rx_roll1 > 1:
+            quality_flag1_1[22] = 1
+
+        # flag 3   0-based indexing
+        quality_flag1_1[3] = 0
+
+        # flag 4 and 5
+        trans_id1 = transmitter_id[sec][ngrx_channel]
+        if trans_id1 == 0:
+            quality_flag1_1[4] = 1
+
+        if trans_id1 == 28:
+            quality_flag1_1[5] = 1
+
+        # flag 6 and 9
+        snr_db1 = snr_db[sec][ngrx_channel]
+
+        if sec > 0:  # 0-based indexing
+            snr_db2 = snr_db[sec-1][ngrx_channel]
+            diff1 = (db2power(snr_db1) - db2power(snr_db2)) / db2power(snr_db1)
+            diff2 = snr_db1 - snr_db2
+
+            if abs(diff1) > 0.1:
+                quality_flag1_1[6] = 1
+
+            if abs(diff2) > 0.24:
+                quality_flag1_1[9] = 1
+
+        # flag 7 and 8
+        dist_to_coast1 = dist_to_coast_km[sec][ngrx_channel]
+
+        if dist_to_coast1 > 0:
+            quality_flag1_1[7] = 1
+
+        if dist_to_coast1 > -25:
+            quality_flag1_1[8] = 1
+
+        # flag 10
+        ant_temp1 = ant_temp_nadir[sec]
+        if sec > 0:
+            ant_temp2 = ant_temp_nadir[sec - 1]
+            rate = (ant_temp2 - ant_temp1) * 60
+
+            if rate > 1:
+                quality_flag1_1[10] = 1
+
+        # flag 11
+        zenith_code_phase1 = zenith_code_phase[sec][ngrx_channel]
+        signal_code_phase1 = delay_correction(meter2chips(add_range_to_sp[sec][ngrx_channel]), 1023)
+        diff1 = zenith_code_phase1 - signal_code_phase1
+        if diff1 >= 10:
+            quality_flag1_1[11] = 1
+
+        # flag 14 and 15
+        sp_delay_row = brcs_ddm_sp_bin_delay_row[sec][ngrx_channel] if not np.isnan(brcs_ddm_sp_bin_delay_row[sec][ngrx_channel]) else 0
+        sp_dopp_col = brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel] if not np.isnan(brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel]) else 0
+
+        if (sp_delay_row < 15) or (sp_delay_row > 35):
+            quality_flag1_1[14] = 1
+
+        if (sp_dopp_col < 2) or (sp_dopp_col > 4):
+            quality_flag1_1[15] = 1
+
+        # flag 16
+        if ((math.floor(sp_delay_row) < 38) and (math.floor(sp_delay_row) > 0) and
+            (math.floor(sp_dopp_col) < 5) and (math.floor(sp_dopp_col) > 1)):
+            sp_dopp_col_range = list(range(math.floor(sp_dopp_col) - 1, math.floor(sp_dopp_col) + 2))
+            sp_delay_raw_range = list(range(math.floor(sp_delay_row), math.floor(sp_dopp_col) + 4))  # TODO: sp_dopp_col, again?
+            brcs_ddma = brcs[sp_delay_raw_range, :][:, sp_dopp_col_range]
+            det = brcs_ddma[brcs_ddma < 0]
+            if len(det) > 0:
+                quality_flag1_1[16] = 1
+
+        # flag 17
+        tx_pos_x1 = tx_pos_x[sec][ngrx_channel]
+        prn_code1 = prn_code[sec][ngrx_channel]
+        if (tx_pos_x1 == 0) and (not np.isnan(prn_code1)):
+            quality_flag1_1[17] = 1
+
+        # flag 18
+        sx_pos_x1 = sx_pos_x[sec][ngrx_channel]
+        if np.isnan(sx_pos_x1) and (not np.isnan(prn_code1)):
+            quality_flag1_1[18] = 1
+
+        # flag 19
+        rx_gain1 = sx_rx_gain[sec][ngrx_channel]
+        if np.isnan(rx_gain1) and (not np.isnan(prn_code1)):
+            quality_flag1_1[19] = 1
+
+        quality_flag1_1[20] = 1
+
+        # flag 21
+        rx_alt = rx_pos_lla[2][sec]
+        if rx_alt > 15000:
+            quality_flag1_1[21] = 1
+
+        # flag 1
+        if (quality_flag1_1[2]  == 1 or
+            quality_flag1_1[3]  == 1 or
+            quality_flag1_1[4]  == 1 or
+            quality_flag1_1[5]  == 1 or
+            quality_flag1_1[6]  == 1 or
+            quality_flag1_1[9]  == 1 or
+            quality_flag1_1[10] == 1 or
+            quality_flag1_1[11] == 1 or
+            quality_flag1_1[12] == 1 or
+            quality_flag1_1[13] == 1 or
+            quality_flag1_1[14] == 1 or
+            quality_flag1_1[15] == 1 or
+            quality_flag1_1[16] == 1 or
+            quality_flag1_1[17] == 1 or
+            quality_flag1_1[19] == 1 or
+            quality_flag1_1[21] == 1 or
+            quality_flag1_1[22] == 1):
+        
+            quality_flag1_1[0] = 1
+
+        quality_flags1[sec][ngrx_channel] = get_quality_flag(quality_flag1_1)
+        
+
+L1_postCal['quality_flags1'] = quality_flags1
+
+np.save('debug3.npy', L1_postCal)
+
+# packet to netCDF
+
+# netCDF_name = './out/sample1.nc'
+# ncfile = nc.Dataset(netCDF_name, 'w', format='NETCDF4')
+# for k, v in L1_postCal.items():
+#     setattr(ncfile, k, v)
+# ncfile.close()  # ValueError: multi-dimensional array attributes not supported
+
+# L1 calibration ends

@@ -61,6 +61,9 @@ def get_ANZ_port(rf_source):
 def power2db(power):
     return 10 * math.log10(power)
 
+def db2power(db):
+    return np.power(10, db/10)
+
 def L1a_counts2watts(ddm_counts, ANZ_port, ddm_counts_cal_db, ddm_power_cal_dbm, std_dev):
     """Converts raw DDM counts to DDM power in watts
 
@@ -285,3 +288,28 @@ def ddm_calibration(
                 snr_db[sec, ngrx_channel] = snr_db_LHCP1
                 snr_db[sec, ngrx_channel + int(J/2)] = snr_db_RHCP1
 
+def get_quality_flag(quality_flag1):
+    quality_flag = (2 ** 22 * quality_flag1[0]  +
+                    2 ** 21 * quality_flag1[1]  +
+                    2 ** 20 * quality_flag1[2]  +
+                    2 ** 19 * quality_flag1[3]  +
+                    2 ** 18 * quality_flag1[4]  +
+                    2 ** 17 * quality_flag1[5]  +
+                    2 ** 16 * quality_flag1[6]  +
+                    2 ** 15 * quality_flag1[7]  +
+                    2 ** 14 * quality_flag1[8]  +
+                    2 ** 13 * quality_flag1[9]  +
+                    2 ** 12 * quality_flag1[10] +
+                    2 ** 11 * quality_flag1[11] +
+                    2 ** 10 * quality_flag1[12] +
+                    2 ** 9  * quality_flag1[13] +
+                    2 ** 8  * quality_flag1[14] +
+                    2 ** 7  * quality_flag1[15] +
+                    2 ** 6  * quality_flag1[16] +
+                    2 ** 5  * quality_flag1[17] +
+                    2 ** 4  * quality_flag1[18] +
+                    2 ** 3  * quality_flag1[19] +
+                    2 ** 2  * quality_flag1[20] +
+                    2 ** 1  * quality_flag1[21] +
+                    2 ** 0  * quality_flag1[22])
+    return quality_flag

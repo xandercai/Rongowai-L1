@@ -235,6 +235,48 @@ def get_local_dem(sx_pos_lla, dem, dtu10, dist):
     return {"lat": local_lat, "lon": local_lon, "ele": local_ele}
 
 
+def get_local_dem_new(P, L, res, dem_data, dtu_model, dist_to_coast):
+    """
+    this function outputs the local DEM data around the local coordinate P
+    P - LLA coordinate
+    """
+    ocean_land_margin = 0
+    lat_P = P[0]
+    lon_P = P[1]
+
+    num_pixels = int(L / res)
+    half_num_pixel = math.floor(num_pixels / 2)
+
+    # sparse dem structures
+    lat = dem_data['lat']
+    lon = dem_data['lon']
+    ele = dem_data['ele']
+
+    lat_index = np.argmin(np.abs(lat - lat_P))
+    lon_index = np.argmin(np.abs(lon - lon_P))
+
+    local_lat = lat[lat_index - half_num_pixel: lat_index + half_num_pixel + 1]
+    local_lon = lon[lon_index - half_num_pixel: lon_index + half_num_pixel + 1]
+
+    if dist_to_coast > ocean_land_margin:
+        local_ele = ele[lat_index - half_num_pixel: lat_index + half_num_pixel + 1,
+                        lon_index - half_num_pixel: lon_index + half_num_pixel + 1]
+    else:
+        local_ele = np.zeros([num_pixels, num_pixels])
+        for i in range(num_pixels):
+            for j in range(num_pixels):
+                pixel_lat = local_lat[i]
+                pixel_lon = local_lon[j]
+                pixel_ele = get_map_value(pixel_lat, pixel_lon, dtu_model)
+                local_ele[i, j] = pixel_ele
+
+    local_dem = {'lat': local_lat,
+                 'lon': local_lon,
+                 'ele': local_ele.astype('double')}
+
+    return local_dem
+
+
 def get_landcover_type2(lat_P, lon_P, lcv_mask):
     """% this function returns the landcover type of the coordinate P (lat lon)
     % over landsurface"""
