@@ -1,6 +1,8 @@
 # Customised
-dat/
 .idea/
+dat/
+out/
+*.nc
 *.npy
 
 # Byte-compiled / optimized / DLL files

@@ -6,7 +6,6 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 from pathlib import Path
 import netCDF4 as nc
-import numpy
 import numpy as np
 import rasterio
 from scipy.interpolate import interpn
@@ -25,6 +24,7 @@ from load_files import (
     load_dat_file_grid,
     get_surf_type2,
     get_local_dem_new,
+    write_netcdf,
 )
 from specular import (
     sp_solver,
@@ -628,10 +628,9 @@ sx_rx_gain = np.full([*transmitter_id.shape], np.nan)
 sx_rx_gain_copol = np.full([*transmitter_id.shape], np.nan)
 sx_rx_gain_xpol = np.full([*transmitter_id.shape], np.nan)
 
-
 # iterate over each second of flight
 for sec in range(len(transmitter_id)):
-    print(f'******** start processing part 4A {sec} second data ********')
+    t0 = timer()
     # retrieve rx positions, velocities and attitdues
     # bundle up craft pos/vel/attitude data into per sec, and rx1
     rx_pos_xyz1 = np.array([rx_pos_x[sec], rx_pos_y[sec], rx_pos_z[sec]])
@@ -777,6 +776,7 @@ for sec in range(len(transmitter_id)):
                 sx_rx_gain[sec, ngrx_channel] = sx_rx_gain_LHCP1[0]  # LHCP channel rx gain
                 sx_rx_gain[sec, ngrx_channel + J_2] = sx_rx_gain_RHCP1[1]  # RHCP channel rx gain
 
+    print(f'******** start processing part 4A {sec} second data with {timer() - t0} ********')
 
 # expand to RHCP channels
 sx_pos_x[:, J_2:J] = sx_pos_x[:, 0:J_2]
@@ -850,10 +850,13 @@ L1_postCal['static_gps_eirp'] = static_gps_eirp         # checked ok
 L1_postCal['gps_tx_power_db_w'] = gps_tx_power_db_w     # checked ok
 L1_postCal['gps_ant_gain_db_i'] = gps_ant_gain_db_i     # checked ok
 
-# np.save('debug.npy', L1_postCal)
 
-##############
+############# to save debug time, save and restore variables ##########
+#
+# np.save('debug.npy', L1_postCal)
+#
 # L1_postCal_loaded = np.load('debug.npy', allow_pickle=True).item()
+##############
 
 # def dic_to_keys_values(dic):
 #     keys, values = list(dic.keys()), list(dic.values())
@@ -1095,7 +1098,8 @@ L1_postCal['confidence_flag'] = confidence_flag                             # ch
 L1_postCal['eff_scatter'] = A_eff
 L1_postCal['A_eff_all'] = A_eff_all
 
-######################################################################
+############# to save debug time, save and restore variables ##########
+
 # np.save('debug1.npy', L1_postCal)
 
 ######################################################################
@@ -1247,49 +1251,31 @@ L1_postCal['coherency_ratio'] = coherency_ratio                         # checke
 L1_postCal['coherency_state'] = coherency_state                         # checked ok
 
 L1_postCal['norm_refl_waveform'] = norm_refl_waveform
+
+############# to save debug time, save and restore variables ##########
 #
-# ######################################################################
 # np.save('debug2.npy', L1_postCal)
 #
-# ######################################################################
-
-#  L1_postCal = np.load('debug2.npy', allow_pickle=True).item()
+# L1_postCal = np.load('debug2.npy', allow_pickle=True).item()
+#######################################################################
 #
-#  sx_pos_x = L1_postCal['sp_pos_x']
-#  sx_pos_y = L1_postCal['sp_pos_y']
-#  sx_pos_z = L1_postCal['sp_pos_z']
+# sx_pos_x = L1_postCal['sp_pos_x']
+# sx_rx_gain = L1_postCal['sp_rx_gain']
+# dist_to_coast_km = L1_postCal['sp_dist_to_coast_km']
+# ddm_nbrcs_v1 = L1_postCal['ddm_nbrcs_v1']
+# ddm_nbrcs_v2 = L1_postCal['ddm_nbrcs_v2']
 #
-#  sx_lat = L1_postCal['sp_lat']
-#  sx_lon = L1_postCal['sp_lon']
-#  sx_alt = L1_postCal['sp_alt']
+# zenith_code_phase = L1_postCal['zenith_code_phase']
 #
-#  sx_vel_x = L1_postCal['sp_vel_x']
-#  sx_vel_y = L1_postCal['sp_vel_y']
-#  sx_vel_z = L1_postCal['sp_vel_z']
+# brcs = L1_postCal['brcs']
 #
-#  sx_inc_angle = L1_postCal['sp_inc_angle']
-#  sx_d_snell_angle = L1_postCal['sp_d_snell_angle']
 #
-#  surface_type = L1_postCal['sp_surface_type']
-#  dist_to_coast_km = L1_postCal['sp_dist_to_coast_km']
-#  LOS_flag = L1_postCal['LOS_flag']
-#
-#  static_gps_eirp = L1_postCal['static_gps_eirp']
-#  gps_tx_power_db_w = L1_postCal['gps_tx_power_db_w']
-#  gps_ant_gain_db_i = L1_postCal['gps_ant_gain_db_i']
-#
-#  sx_rx_gain = L1_postCal['sp_rx_gain']
-#
-#  rx_to_sp_range = L1_postCal['rx_to_sp_range']
-#  tx_to_sp_range = L1_postCal['tx_to_sp_range']
-#
-#  brcs_ddm_sp_bin_delay_row = L1_postCal['brcs_ddm_sp_bin_delay_row']
-#  brcs_ddm_sp_bin_dopp_col = L1_postCal['brcs_ddm_sp_bin_dopp_col']
-# ######################################################################
+# brcs_ddm_sp_bin_delay_row = L1_postCal['brcs_ddm_sp_bin_delay_row']
+# brcs_ddm_sp_bin_dopp_col = L1_postCal['brcs_ddm_sp_bin_dopp_col']
+#######################################################################
 
 # Cross Pol
 
-tx_pos_x = np.full([*transmitter_id.shape], np.nan)
 nbrcs_cross_pol_v1 = np.full([*transmitter_id.shape], np.nan)
 nbrcs_cross_pol_v2 = np.full([*transmitter_id.shape], np.nan)
 
@@ -1298,7 +1284,7 @@ for sec in range(len(transmitter_id)):
 
         nbrcs_LHCP_v1 = ddm_nbrcs_v1[sec][ngrx_channel]
         nbrcs_RHCP_v1 = ddm_nbrcs_v1[sec][ngrx_channel + J_2]
-        
+
         nbrcs_LHCP_v2 = ddm_nbrcs_v2[sec][ngrx_channel]
         nbrcs_RHCP_v2 = ddm_nbrcs_v2[sec][ngrx_channel + J_2]
 
@@ -1331,7 +1317,7 @@ for sec in range(len(transmitter_id)):
         rx_roll1 = rx_roll[sec]
         rx_pitch1 = rx_pitch[sec]
         rx_yaw1 = rx_yaw[sec]
-    
+
         if (rx_roll1 >= 29) or (rx_pitch1 >= 9) or (rx_yaw1 >= 4):  # 0-based indexing
             quality_flag1_1[2] = 1
         else:
@@ -1391,24 +1377,27 @@ for sec in range(len(transmitter_id)):
             quality_flag1_1[11] = 1
 
         # flag 14 and 15
-        sp_delay_row = brcs_ddm_sp_bin_delay_row[sec][ngrx_channel] if not np.isnan(brcs_ddm_sp_bin_delay_row[sec][ngrx_channel]) else 0
-        sp_dopp_col = brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel] if not np.isnan(brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel]) else 0
+        sp_delay_row = brcs_ddm_sp_bin_delay_row[sec][ngrx_channel]
+        sp_dopp_col = brcs_ddm_sp_bin_dopp_col[sec][ngrx_channel]
 
-        if (sp_delay_row < 15) or (sp_delay_row > 35):
-            quality_flag1_1[14] = 1
+        if not np.isnan(sp_delay_row):
+            if (sp_delay_row < 15) or (sp_delay_row > 35):
+                quality_flag1_1[14] = 1
 
-        if (sp_dopp_col < 2) or (sp_dopp_col > 4):
-            quality_flag1_1[15] = 1
+        if not np.isnan(sp_dopp_col):
+            if (sp_dopp_col < 2) or (sp_dopp_col > 4):
+                quality_flag1_1[15] = 1
 
         # flag 16
-        if ((math.floor(sp_delay_row) < 38) and (math.floor(sp_delay_row) > 0) and
-            (math.floor(sp_dopp_col) < 5) and (math.floor(sp_dopp_col) > 1)):
-            sp_dopp_col_range = list(range(math.floor(sp_dopp_col) - 1, math.floor(sp_dopp_col) + 2))
-            sp_delay_raw_range = list(range(math.floor(sp_delay_row), math.floor(sp_dopp_col) + 4))  # TODO: sp_dopp_col, again?
-            brcs_ddma = brcs[sp_delay_raw_range, :][:, sp_dopp_col_range]
-            det = brcs_ddma[brcs_ddma < 0]
-            if len(det) > 0:
-                quality_flag1_1[16] = 1
+        if not np.isnan(sp_delay_row) and not np.isnan(sp_dopp_col):
+            if ((math.floor(sp_delay_row) < 38) and (math.floor(sp_delay_row) > 0) and
+                (math.floor(sp_dopp_col) < 5) and (math.floor(sp_dopp_col) > 1)):
+                sp_dopp_col_range = list(range(math.floor(sp_dopp_col) - 1, math.floor(sp_dopp_col) + 2))
+                sp_delay_raw_range = list(range(math.floor(sp_delay_row), math.floor(sp_dopp_col) + 4))  # TODO: sp_dopp_col, again?
+                brcs_ddma = brcs[sp_delay_raw_range, :][:, sp_dopp_col_range]
+                det = brcs_ddma[brcs_ddma < 0]
+                if len(det) > 0:
+                    quality_flag1_1[16] = 1
 
         # flag 17
         tx_pos_x1 = tx_pos_x[sec][ngrx_channel]
@@ -1451,22 +1440,26 @@ for sec in range(len(transmitter_id)):
             quality_flag1_1[19] == 1 or
             quality_flag1_1[21] == 1 or
             quality_flag1_1[22] == 1):
-        
+
             quality_flag1_1[0] = 1
 
         quality_flags1[sec][ngrx_channel] = get_quality_flag(quality_flag1_1)
-        
+
 
 L1_postCal['quality_flags1'] = quality_flags1
 
-np.save('debug3.npy', L1_postCal)
 
-# packet to netCDF
+############# to save debug time, save and restore variables ##########
+#
+# np.save('debug3.npy', L1_postCal)
+#
+# L1_postCal = np.load('debug3.npy', allow_pickle=True).item()
+# ######################################################################
 
-# netCDF_name = './out/sample1.nc'
-# ncfile = nc.Dataset(netCDF_name, 'w', format='NETCDF4')
-# for k, v in L1_postCal.items():
-#     setattr(ncfile, k, v)
-# ncfile.close()  # ValueError: multi-dimensional array attributes not supported
+definition_file = './dat/L1_Dict/L1_Dict_v1_30.xlsx'
+output_file = './out/sample1.nc'
+
+# to netcdf
+write_netcdf(L1_postCal, definition_file, output_file)
 
 # L1 calibration ends

@@ -662,7 +662,7 @@ def get_chi2(num_delay_bins, num_doppler_bins):
         # compute complex AF value at each delay-doppler bin
         return get_amb_fun(dtau, dfreq, tau_c, T_coh)
 
-    chi = np.fromfunction(ix_func, (num_delay_bins, num_doppler_bins))
+    chi = np.fromfunction(ix_func, (num_delay_bins, num_doppler_bins))  # 10 times faster than for loop
 
     chi_mag = np.abs(chi)           # magnitude
     chi2 = np.square(chi_mag)       # chi_square

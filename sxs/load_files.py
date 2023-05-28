@@ -2,9 +2,11 @@
 # load_files.py
 # Functions relating to the finding, loading, and processing of input files
 
+import netCDF4
 import array
 import math
 import numpy as np
+import pandas as pd
 import os
 from pathlib import Path
 from scipy.interpolate import interp1d, interpn
@@ -408,3 +410,93 @@ def get_surf_type2(P, cst_mask, lcv_mask, water_mask):
         surface_type = landcover_type
 
     return surface_type
+
+
+def get_datatype(data_series, value=None):
+    datatype = data_series['Data_type'].values[0]
+    if datatype == 'single':
+        return np.single
+    elif datatype == 'double':
+        return np.double
+    elif datatype == 'int8':
+        return np.int8
+    elif datatype == 'int16':
+        return np.int16
+    elif datatype == 'int32':
+        return np.int32
+    elif datatype == 'int64':
+        return np.int64
+    elif datatype == 'uint8':
+        return np.uint8
+    elif datatype == 'uint16':
+        return np.uint16
+    elif datatype == 'uint32':
+        return np.uint32
+    elif datatype == 'uint64':
+        return np.uint64
+    elif datatype == 'string':
+        if isinstance(value, str):
+            return 'S' + str(len(value))
+    else:
+        raise Exception(f"datatype '{datatype}' not supported")
+
+
+def get_dimensions(data_series):
+    dim = data_series['Dimensions'].values[0].split(',')
+    return tuple([x.strip() for x in dim])
+
+
+def write_netcdf(dict_in, definition_file, output_file):
+    assert isinstance(dict_in, dict), "input must be a dictionary"
+    assert Path(definition_file).suffix == '.xlsx', 'definition file must be a .xlsx file'
+
+    # read definition file
+    df = pd.read_excel(definition_file)
+
+    # open netcdf file
+    with netCDF4.Dataset(output_file, mode='w') as ncfile:
+        # create dimensions
+        ncfile.createDimension('sample', None)
+        ncfile.createDimension('ddm', None)
+        ncfile.createDimension('delay', None)
+        ncfile.createDimension('doppler', None)
+
+        for k, v in dict_in.items():
+            print('writing: ', k)
+            ds_k = df[df['Name'] == k]
+
+            if ds_k.empty:
+                print(f"Warning: variable {k} not found in definition file, skip this variable.")
+                continue
+            elif len(ds_k) > 1:
+                print(f"Warning: find multiple variable {k} definition in definition file, skip this variable.")
+                continue
+
+            if ds_k['Data_type'].str.contains('attribute').any():  # attribute
+                ncfile.k = str(v)
+            elif ds_k['Dimensions'].item() == '<none>':  # scalar
+                var_k = ncfile.createVariable(k, get_datatype(ds_k, v), (), zlib=True)
+                var_k.units = ds_k['Units'].values[0]
+                var_k.long_name = ds_k['Long_name'].values[0]
+                var_k.comment = ds_k['Comment'].values[0]
+                var_k[()] = v
+            else:  # variable
+                var_k = ncfile.createVariable(k, get_datatype(ds_k), get_dimensions(ds_k))
+                var_k.units = ds_k['Units'].values[0]
+                var_k.long_name = ds_k['Long_name'].values[0]
+                var_k.comment = ds_k['Comment'].values[0]
+                if len(get_dimensions(ds_k)) == len(v.shape) == 1:
+                    var_k[:] = v
+                elif len(get_dimensions(ds_k)) == len(v.shape) == 2:
+                    var_k[:, :] = v
+                elif len(get_dimensions(ds_k)) == len(v.shape) == 3:
+                    var_k[:, :, :] = v
+                elif len(get_dimensions(ds_k)) == len(v.shape) == 4:
+                    var_k[:, :, :, :] = v
+                elif len(get_dimensions(ds_k)) == 3 and len(v.shape) == 4 and v.shape[3] == 1:  # norm_refl_waveform
+                    var_k[:, :, :] = np.squeeze(v, axis=3)
+                else:
+                    raise Exception(f"variable {k} has unsupported dimensions")
+
+        # print the Dataset object to see what we've got
+        print(ncfile)
